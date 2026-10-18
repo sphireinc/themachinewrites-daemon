@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -14,6 +16,53 @@ func openTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func TestClaimJobIsExclusiveAndRecoversExpiredLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	if _, err := store.DB().ExecContext(ctx, `
+        INSERT INTO jobs(job_id, state, created_at, updated_at)
+        VALUES ('job-claim', 'pending', ?, ?)`, now.Format(time.RFC3339), now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan ClaimResult, 2)
+	var wg sync.WaitGroup
+	for _, worker := range []string{"worker-a", "worker-b"} {
+		wg.Add(1)
+		go func(worker string) {
+			defer wg.Done()
+			claim, err := store.ClaimJob(ctx, worker, now, time.Minute)
+			results <- ClaimResult{Claim: claim, Err: err}
+		}(worker)
+	}
+	wg.Wait()
+	close(results)
+
+	claimed := 0
+	var owner string
+	for result := range results {
+		if result.Err != nil {
+			t.Fatal(result.Err)
+		}
+		if result.Claim.Found {
+			claimed++
+			owner = result.Claim.WorkerID
+		}
+	}
+	if claimed != 1 {
+		t.Fatalf("claimed by %d workers, want exactly 1", claimed)
+	}
+
+	claim, err := store.ClaimJob(ctx, "worker-c", now.Add(2*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claim.Found || claim.JobID != "job-claim" || claim.WorkerID != "worker-c" {
+		t.Fatalf("expired lease claim = %#v, want worker-c takeover from %s", claim, owner)
+	}
 }
 
 func TestJobsAndOutboxHaveRequiredUniquenessAndStateConstraints(t *testing.T) {
