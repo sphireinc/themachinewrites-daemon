@@ -110,6 +110,71 @@ func TestV1SchemaIncludesUniqueIngestionCursors(t *testing.T) {
 	}
 }
 
+func TestObservedItemsDeduplicateByFingerprint(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	inserted, err := store.ObserveItem(ctx, ObservedItem{
+		URLCanonicalHash: "url-hash",
+		SourceID:         "source-one",
+		DiscoveredAt:     "2026-10-18T20:00:00Z",
+		Fingerprint:      "fingerprint-one",
+		LastSeenAt:       "2026-10-18T20:00:00Z",
+	})
+	if err != nil || !inserted {
+		t.Fatalf("first ObserveItem() = %t, %v; want inserted", inserted, err)
+	}
+	inserted, err = store.ObserveItem(ctx, ObservedItem{
+		URLCanonicalHash: "different-url",
+		SourceID:         "source-two",
+		DiscoveredAt:     "2026-10-18T20:01:00Z",
+		Fingerprint:      "fingerprint-one",
+		LastSeenAt:       "2026-10-18T20:01:00Z",
+	})
+	if err != nil || inserted {
+		t.Fatalf("duplicate ObserveItem() = %t, %v; want deduplicated", inserted, err)
+	}
+	var lastSeen string
+	if err := store.DB().QueryRowContext(ctx,
+		"SELECT last_seen_at FROM observed_items WHERE fingerprint = ?", "fingerprint-one").Scan(&lastSeen); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeen != "2026-10-18T20:01:00Z" {
+		t.Fatalf("last_seen_at = %q, want refreshed timestamp", lastSeen)
+	}
+}
+
+func TestObservedItemRejectsInvalidTimestampsWithoutInsert(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	_, err = store.ObserveItem(ctx, ObservedItem{
+		URLCanonicalHash: "url-hash",
+		SourceID:         "source-one",
+		DiscoveredAt:     "not-a-time",
+		Fingerprint:      "fingerprint-invalid",
+		LastSeenAt:       "2026-10-18T20:00:00Z",
+	})
+	if err == nil || !strings.Contains(err.Error(), "RFC3339") {
+		t.Fatalf("ObserveItem() error = %v, want timestamp rejection", err)
+	}
+	var count int
+	if err := store.DB().QueryRowContext(ctx, "SELECT count(*) FROM observed_items").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("observed_items count = %d, want 0", count)
+	}
+}
+
 func userVersion(t *testing.T, db interface{ QueryRow(string, ...any) *Row }) int {
 	t.Helper()
 	var version int
