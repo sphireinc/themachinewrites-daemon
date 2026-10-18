@@ -1,9 +1,11 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,5 +63,88 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() accepted an unknown key")
+	}
+}
+
+func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
+	directory := t.TempDir()
+	sources := filepath.Join(directory, "sources.yaml")
+	runtimeDirectory := filepath.Join(directory, "runtime")
+	publicRepository := filepath.Join(directory, "public")
+	if err := os.WriteFile(sources, []byte("sources: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runtimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(publicRepository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	valid := Config{
+		PollInterval:    10 * time.Minute,
+		SourcesPath:     sources,
+		RuntimeDir:      runtimeDirectory,
+		CodexExecutable: "codex",
+		CodexTimeout:    time.Minute,
+		PublicRepoPath:  publicRepository,
+		Budget: Budget{
+			DailyModelInvocations: 10,
+			DailyInputTokens:      100000,
+			DailyOutputTokens:     20000,
+			MaxAttempts:           3,
+		},
+		DryRun: true,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid configuration error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		change func(*Config)
+		want   string
+	}{
+		{name: "zero poll interval", change: func(c *Config) { c.PollInterval = 0 }, want: "poll_interval"},
+		{name: "negative codex timeout", change: func(c *Config) { c.CodexTimeout = -time.Second }, want: "codex_timeout"},
+		{name: "empty sources path", change: func(c *Config) { c.SourcesPath = "" }, want: "sources_path"},
+		{name: "empty runtime dir", change: func(c *Config) { c.RuntimeDir = "" }, want: "runtime_dir"},
+		{name: "empty codex executable", change: func(c *Config) { c.CodexExecutable = "  " }, want: "codex_executable"},
+		{name: "empty public repo", change: func(c *Config) { c.PublicRepoPath = "" }, want: "public_repo_path"},
+		{name: "zero invocation budget", change: func(c *Config) { c.Budget.DailyModelInvocations = 0 }, want: "daily_model_invocations"},
+		{name: "zero input budget", change: func(c *Config) { c.Budget.DailyInputTokens = 0 }, want: "daily_input_tokens"},
+		{name: "zero output budget", change: func(c *Config) { c.Budget.DailyOutputTokens = 0 }, want: "daily_output_tokens"},
+		{name: "unsafe retry count", change: func(c *Config) { c.Budget.MaxAttempts = 100 }, want: "max_attempts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid
+			tt.change(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want field %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateFeedURLRequiresHTTPSExceptLocalFixtures(t *testing.T) {
+	for _, tt := range []struct {
+		raw         string
+		allowLocal  bool
+		shouldError bool
+	}{
+		{raw: "https://example.org/feed.xml"},
+		{raw: "http://127.0.0.1:8080/feed.xml", allowLocal: true},
+		{raw: "http://example.org/feed.xml", shouldError: true},
+		{raw: "file:///etc/passwd", shouldError: true},
+	} {
+		parsed, parseErr := url.Parse(tt.raw)
+		if parseErr != nil {
+			t.Fatalf("url.Parse(%q): %v", tt.raw, parseErr)
+		}
+		err := validateFeedURL(parsed, tt.allowLocal)
+		if (err != nil) != tt.shouldError {
+			t.Errorf("validateFeedURL(%q, %v) error = %v, shouldError = %v", tt.raw, tt.allowLocal, err, tt.shouldError)
+		}
 	}
 }
