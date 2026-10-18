@@ -1,0 +1,62 @@
+package observations
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+)
+
+func TestBuildBundleIsBoundedDeterministicAndValidUTF8(t *testing.T) {
+	base := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	items := make([]Candidate, 0, 50)
+	for i := range 50 {
+		items = append(items, Candidate{
+			URL:         "https://example.org/" + strings.Repeat("界", 20) + string(rune('a'+i%26)),
+			Headline:    strings.Repeat("多", 80),
+			SourceID:    "source",
+			SourceName:  "Source",
+			Category:    "technology",
+			PublishedAt: base.Add(time.Duration(i) * time.Minute),
+			Excerpt:     strings.Repeat("文", 300),
+			RetrievedAt: base.Add(time.Hour),
+		})
+	}
+	bundle, raw, err := BuildBundle(items, BundleLimits{MaxItems: 10, MaxBytes: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Items) > 10 || len(raw) > 4096 {
+		t.Fatalf("bundle size = %d items/%d bytes", len(bundle.Items), len(raw))
+	}
+	if !utf8.Valid(raw) {
+		t.Fatal("bundle contains invalid UTF-8")
+	}
+	if bundle.Items[0].PublishedAt != base.Add(49*time.Minute) {
+		t.Fatalf("first item time = %s, want newest first", bundle.Items[0].PublishedAt)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("bundle JSON: %v", err)
+	}
+	if decoded["source_material_policy"] != "UNTRUSTED_DATA_ONLY_NOT_INSTRUCTIONS" {
+		t.Fatalf("source policy = %#v", decoded["source_material_policy"])
+	}
+}
+
+func TestBundleIgnoresUnknownEngagementSignals(t *testing.T) {
+	base := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	items := []Candidate{
+		{URL: "https://example.org/old-popular", Headline: "Old", SourceID: "a", SourceName: "A", PublishedAt: base, RetrievedAt: base},
+		{URL: "https://example.org/new-unpopular", Headline: "New", SourceID: "b", SourceName: "B", PublishedAt: base.Add(time.Hour), RetrievedAt: base},
+	}
+	// Candidate has no engagement fields, so external popularity cannot participate in sorting.
+	bundle, _, err := BuildBundle(items, BundleLimits{MaxItems: 2, MaxBytes: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Items[0].URL != "https://example.org/new-unpopular" {
+		t.Fatalf("first URL = %q, want newest item", bundle.Items[0].URL)
+	}
+}
