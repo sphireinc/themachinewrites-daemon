@@ -29,3 +29,17 @@ func TestFingerprintSeparatesDistinctStories(t *testing.T) {
 		t.Fatal("distinct stories share fingerprint")
 	}
 }
+
+func TestFingerprintIncorporatesNormalizedSourceEvidence(t *testing.T) {
+	one, err := Fingerprint("https://one.example/article", "Shared headline", "Source One")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := Fingerprint("https://two.example/article", "Shared headline", "Source Two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatal("source evidence did not participate in fingerprint")
+	}
+}

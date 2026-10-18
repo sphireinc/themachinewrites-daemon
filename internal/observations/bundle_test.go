@@ -60,3 +60,27 @@ func TestBundleIgnoresUnknownEngagementSignals(t *testing.T) {
 		t.Fatalf("first URL = %q, want newest item", bundle.Items[0].URL)
 	}
 }
+
+func TestBundleNeverExceedsByteLimitForVeryLargeFirstItem(t *testing.T) {
+	huge := strings.Repeat("界", 1_000_000)
+	items := []Candidate{{
+		URL: "https://example.org/huge", Headline: huge, Excerpt: huge,
+		SourceID: "source", SourceName: "Source", PublishedAt: time.Now().UTC(), RetrievedAt: time.Now().UTC(),
+	}}
+	_, raw, err := BuildBundle(items, BundleLimits{MaxItems: 1, MaxBytes: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 512 || !utf8.Valid(raw) {
+		t.Fatalf("bundle size/UTF-8 = %d/%t, want <=512/true", len(raw), utf8.Valid(raw))
+	}
+}
+
+func TestUTF8TruncationPreservesRuneBoundaries(t *testing.T) {
+	for limit := 1; limit <= 12; limit++ {
+		got := truncateUTF8("é界🙂x", limit)
+		if !utf8.ValidString(got) || len(got) > limit {
+			t.Fatalf("truncateUTF8(limit=%d) = %q, valid=%t, bytes=%d", limit, got, utf8.ValidString(got), len(got))
+		}
+	}
+}
