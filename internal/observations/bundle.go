@@ -1,7 +1,6 @@
 package observations
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,15 +76,21 @@ func BuildBundle(candidates []Candidate, limits BundleLimits) (Bundle, []byte, e
 		if item.Headline == "" || item.PublishedAt.IsZero() || item.RetrievedAt.IsZero() {
 			continue
 		}
-		bundle.Items = append(bundle.Items, item)
-		raw, err := json.Marshal(bundle)
+		itemRaw, err := json.Marshal(item)
+		if err != nil {
+			return Bundle{}, nil, fmt.Errorf("marshal bundle item: %w", err)
+		}
+		current := bundle
+		current.Items = append(append([]BundleItem(nil), bundle.Items...), item)
+		raw, err := json.Marshal(current)
 		if err != nil {
 			return Bundle{}, nil, fmt.Errorf("marshal bundle: %w", err)
 		}
 		if len(raw) > limits.MaxBytes {
-			bundle.Items = bundle.Items[:len(bundle.Items)-1]
 			break
 		}
+		_ = itemRaw
+		bundle = current
 	}
 	raw, err := json.Marshal(bundle)
 	if err != nil {
@@ -121,11 +126,14 @@ func truncateUTF8(value string, maxBytes int) string {
 	if len(value) <= maxBytes {
 		return strings.ToValidUTF8(value, "�")
 	}
-	value = value[:maxBytes]
-	for !utf8.ValidString(value) {
-		value = value[:len(value)-1]
+	var builder strings.Builder
+	for _, r := range value {
+		if builder.Len()+utf8.RuneLen(r) > maxBytes {
+			break
+		}
+		builder.WriteRune(r)
 	}
-	return value
+	return builder.String()
 }
 
 func min(a, b int) int {
@@ -134,5 +142,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-
-var _ = bytes.MinRead
