@@ -39,6 +39,14 @@ func (s *Store) AcknowledgePublication(ctx context.Context, postID, commitSHA, a
 		if existing.String != commitSHA {
 			return ErrPublicationConflict
 		}
+		if _, err := tx.ExecContext(ctx, `
+            UPDATE jobs
+            SET state = 'published', commit_sha = ?, lease_deadline = NULL,
+                worker_id = NULL, last_error = NULL, updated_at = ?
+            WHERE job_id = ? AND post_id = ?`,
+			commitSHA, timestamp, jobID, postID); err != nil {
+			return fmt.Errorf("reconcile published job: %w", err)
+		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit idempotent acknowledgement: %w", err)
 		}

@@ -36,35 +36,29 @@ func (s *Store) ObserveItem(ctx context.Context, item ObservedItem) (bool, error
 		return false, fmt.Errorf("begin observed-item transaction: %w", err)
 	}
 	defer tx.Rollback()
-
-	var existing int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT count(*) FROM observed_items WHERE fingerprint = ?", item.Fingerprint).Scan(&existing); err != nil {
-		return false, fmt.Errorf("check observed item: %w", err)
-	}
-	if existing == 1 {
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE observed_items SET last_seen_at = ? WHERE fingerprint = ?",
-			lastSeenAt, item.Fingerprint); err != nil {
-			return false, fmt.Errorf("refresh observed item: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit observed-item refresh: %w", err)
-		}
-		return false, nil
-	}
-
 	if _, err := tx.ExecContext(ctx, `
         INSERT INTO observed_items(
-            url_canonical_hash, source_id, discovered_at, fingerprint, last_seen_at
-        ) VALUES (?, ?, ?, ?, ?)`,
+            url_canonical_hash, source_id, discovered_at, fingerprint, last_seen_at, inserted
+        ) VALUES (?, ?, ?, ?, ?, 1)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+            inserted = 0,
+            last_seen_at = CASE
+                WHEN excluded.last_seen_at > observed_items.last_seen_at
+                THEN excluded.last_seen_at
+                ELSE observed_items.last_seen_at
+            END`,
 		item.URLCanonicalHash, item.SourceID, discoveredAt, item.Fingerprint, lastSeenAt); err != nil {
 		return false, fmt.Errorf("record observed item: %w", err)
+	}
+	var inserted int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT inserted FROM observed_items WHERE fingerprint = ?", item.Fingerprint).Scan(&inserted); err != nil {
+		return false, fmt.Errorf("read observed-item status: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit observed item: %w", err)
 	}
-	return true, nil
+	return inserted == 1, nil
 }
 
 func normaliseTimestamp(value string) (string, error) {

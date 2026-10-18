@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -172,6 +173,79 @@ func TestObservedItemRejectsInvalidTimestampsWithoutInsert(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("observed_items count = %d, want 0", count)
+	}
+}
+
+func TestConcurrentObservedItemsDeduplicateWithoutFatalError(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	item := ObservedItem{
+		URLCanonicalHash: "url-hash",
+		SourceID:         "source-one",
+		DiscoveredAt:     "2026-10-18T20:00:00Z",
+		Fingerprint:      "fingerprint-concurrent",
+		LastSeenAt:       "2026-10-18T20:00:00Z",
+	}
+
+	start := make(chan struct{})
+	results := make(chan bool, 2)
+	errors := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			inserted, err := store.ObserveItem(ctx, item)
+			results <- inserted
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+
+	insertedCount := 0
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent ObserveItem() error = %v", err)
+		}
+	}
+	for inserted := range results {
+		if inserted {
+			insertedCount++
+		}
+	}
+	if insertedCount != 1 {
+		t.Fatalf("inserted count = %d, want exactly 1", insertedCount)
+	}
+}
+
+func TestObservedItemLastSeenDoesNotMoveBackward(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	item := ObservedItem{
+		URLCanonicalHash: "url-hash",
+		SourceID:         "source-one",
+		DiscoveredAt:     "2026-10-18T20:00:00Z",
+		Fingerprint:      "fingerprint-monotonic",
+		LastSeenAt:       "2026-10-18T20:02:00Z",
+	}
+	if inserted, err := store.ObserveItem(ctx, item); err != nil || !inserted {
+		t.Fatalf("first ObserveItem() = %t, %v", inserted, err)
+	}
+	item.LastSeenAt = "2026-10-18T20:01:00Z"
+	if inserted, err := store.ObserveItem(ctx, item); err != nil || inserted {
+		t.Fatalf("repeat ObserveItem() = %t, %v", inserted, err)
+	}
+	var lastSeen string
+	if err := store.DB().QueryRowContext(ctx,
+		"SELECT last_seen_at FROM observed_items WHERE fingerprint = ?", item.Fingerprint).Scan(&lastSeen); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeen != "2026-10-18T20:02:00Z" {
+		t.Fatalf("last_seen_at = %q, want newer timestamp preserved", lastSeen)
 	}
 }
 
