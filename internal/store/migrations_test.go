@@ -41,6 +41,9 @@ func TestMigrateRollsBackFailedMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if _, err := store.DB().ExecContext(ctx, "PRAGMA user_version = 0"); err != nil {
+		t.Fatal(err)
+	}
 
 	err = store.migrate(ctx, []Migration{
 		{Version: 1, Name: "one", SQL: "CREATE TABLE one (id INTEGER PRIMARY KEY);"},
@@ -49,8 +52,15 @@ func TestMigrateRollsBackFailedMigration(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "migration 2 bad") {
 		t.Fatalf("migrate() error = %v, want bounded migration failure", err)
 	}
-	if got := userVersion(t, store.DB()); got != 1 {
-		t.Fatalf("user_version after rollback = %d, want 1", got)
+	if got := userVersion(t, store.DB()); got != 0 {
+		t.Fatalf("user_version after rollback = %d, want 0", got)
+	}
+	var oneExists int
+	if err := store.DB().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='one'").Scan(&oneExists); err != nil {
+		t.Fatal(err)
+	}
+	if oneExists != 0 {
+		t.Fatal("migration one remained committed after migration two failed")
 	}
 	var exists int
 	if err := store.DB().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='two'").Scan(&exists); err != nil {
@@ -77,6 +87,26 @@ func TestMigrateRejectsNonSequentialVersionsAndNewerDatabase(t *testing.T) {
 	}
 	if err := store.migrate(ctx, migrations); err == nil || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("migrate() error = %v, want newer-schema rejection", err)
+	}
+}
+
+func TestV1SchemaIncludesUniqueIngestionCursors(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.DB().ExecContext(ctx,
+		"INSERT INTO ingestion_cursors(source_id, etag, last_modified, last_checked_at, error_count) VALUES (?, NULL, NULL, ?, 0)",
+		"source-one", "2026-10-18T20:00:00Z"); err != nil {
+		t.Fatalf("insert cursor: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx,
+		"INSERT INTO ingestion_cursors(source_id, etag, last_modified, last_checked_at, error_count) VALUES (?, NULL, NULL, ?, 0)",
+		"source-one", "2026-10-18T20:01:00Z"); err == nil {
+		t.Fatal("duplicate source_id was accepted")
 	}
 }
 
