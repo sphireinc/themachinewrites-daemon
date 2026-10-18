@@ -22,3 +22,4 @@
 /themachinewrites-daemon
 *.test
 .DS_Store
+/.serena/
