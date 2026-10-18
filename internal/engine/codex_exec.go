@@ -37,6 +37,7 @@ type CodexExec struct {
 	Timeout        time.Duration
 	MaxOutputBytes int
 	Environment    []string
+	Workspace      string
 	Runner         processRunner
 	TempDir        string
 }
@@ -56,14 +57,20 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 	if c.Timeout <= 0 || c.MaxOutputBytes <= 0 || c.Runner == nil {
 		return ExecOutput{}, errors.New("codex execution limits are not configured")
 	}
+	if strings.TrimSpace(c.Workspace) == "" {
+		return ExecOutput{}, errors.New("isolated Codex workspace is required")
+	}
+	if err := requireEmptyDirectory(c.Workspace); err != nil {
+		return ExecOutput{}, err
+	}
 	environment := c.Environment
 	if environment == nil {
 		environment = minimalEnvironment(os.Environ())
 	}
 	for _, entry := range environment {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.Contains(strings.ToUpper(key), "TOKEN") || strings.Contains(strings.ToUpper(key), "SECRET") {
-			return ExecOutput{}, errors.New("codex environment contains forbidden credential variable")
+		if !allowedCodexEnvironment[key] {
+			return ExecOutput{}, errors.New("codex environment contains a variable outside the allowlist")
 		}
 	}
 	tempDir := c.TempDir
@@ -85,7 +92,7 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 	args := []string{
 		"exec", "--sandbox", c.Sandbox, "--ephemeral", "--json",
 		"--output-schema", schemaPath, "--output-last-message", outputPath,
-		"--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "-",
+		"--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--cd", c.Workspace, "-",
 	}
 	processCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
@@ -107,16 +114,32 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 }
 
 func minimalEnvironment(environment []string) []string {
-	allowed := map[string]bool{
-		"PATH": true, "HOME": true, "USER": true, "TMPDIR": true, "LANG": true, "LC_ALL": true,
-		"GOCACHE": true, "GOMODCACHE": true,
-	}
 	var result []string
 	for _, entry := range environment {
 		key, _, _ := strings.Cut(entry, "=")
-		if allowed[key] {
+		if allowedCodexEnvironment[key] {
 			result = append(result, entry)
 		}
 	}
 	return result
+}
+
+var allowedCodexEnvironment = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "TMPDIR": true, "LANG": true, "LC_ALL": true,
+	"GOCACHE": true, "GOMODCACHE": true,
+}
+
+func requireEmptyDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return errors.New("isolated Codex workspace must be an existing directory")
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("inspect Codex workspace: %w", err)
+	}
+	if len(entries) != 0 {
+		return errors.New("isolated Codex workspace must be empty")
+	}
+	return nil
 }

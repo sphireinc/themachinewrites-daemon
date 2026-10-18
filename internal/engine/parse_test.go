@@ -35,6 +35,8 @@ func TestParseProposalRejectsExtraMalformedInvalidAndTruncated(t *testing.T) {
 		{name: "invalid UTF-8", raw: append([]byte(`{"action":"defer","reason":"`), 0xff, '"', '}'), want: ErrMalformedProposal},
 		{name: "trailing", raw: []byte(`{"action":"defer","reason":"No."} {"action":"publish"}`), want: ErrMalformedProposal},
 		{name: "publish missing body", raw: []byte(`{"action":"publish","reason":"Publish.","title":"A title long enough","type":"observation"}`), want: ErrInvalidProposal},
+		{name: "publish raw HTML", raw: []byte(`{"action":"publish","reason":"Publish.","title":"A title long enough","type":"observation","body":"<script>alert(1)</script>","sources":[{"title":"Source","url":"https://example.org/source","retrieved_at":"2026-10-18T20:00:00Z"}],"topics":["technology"],"confidence_rationale":"Source."}`), want: ErrInvalidProposal},
+		{name: "publish control character", raw: []byte("{\"action\":\"publish\",\"reason\":\"Publish.\",\"title\":\"A title long enough\",\"type\":\"observation\",\"body\":\"unsafe\\u0000body\",\"sources\":[{\"title\":\"Source\",\"url\":\"https://example.org/source\",\"retrieved_at\":\"2026-10-18T20:00:00Z\"}],\"topics\":[\"technology\"],\"confidence_rationale\":\"Source.\"}"), want: ErrInvalidProposal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

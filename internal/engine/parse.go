@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+var rawHTMLPattern = regexp.MustCompile(`(?i)<\s*(script|iframe|object|embed|style|img|svg|math|link|meta)\b`)
 
 var (
 	ErrMalformedProposal = errors.New("malformed codex proposal")
@@ -68,6 +71,9 @@ func validateProposal(proposal Proposal) error {
 		}
 		if len([]rune(proposal.Body)) < 1 || len([]rune(proposal.Body)) > 20000 {
 			return errors.New("publish body must contain 1–20000 characters")
+		}
+		if rawHTMLPattern.MatchString(proposal.Body) || strings.ContainsRune(proposal.Body, '\x00') {
+			return errors.New("publish body contains executable markup or control characters")
 		}
 		if len(proposal.Sources) < 1 || len(proposal.Sources) > 20 {
 			return errors.New("publish proposal must contain sources")
