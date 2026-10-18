@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestRunDispatchesSupportedCommands(t *testing.T) {
-	for _, command := range []string{"run", "once", "validate-config"} {
+	for _, command := range []string{"run", "once"} {
 		t.Run(command, func(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
@@ -42,5 +44,58 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("stderr = %q, want unknown-command message", stderr.String())
+	}
+}
+
+func TestValidateConfigLoadsDryRunWithoutCredentials(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "daemon.yaml")
+	content := "dry_run: true\nsources_path: sources.yaml\nruntime_dir: runtime\n" +
+		"public_repo_path: public\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"validate-config", "--config", path}, &stdout, &stderr); code != 0 {
+		t.Fatalf("validate-config exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "configuration valid") || !strings.Contains(stdout.String(), "dry_run") {
+		t.Fatalf("stdout = %q, want redacted valid configuration summary", stdout.String())
+	}
+}
+
+func TestValidateConfigFailureDoesNotLeakYAMLCredential(t *testing.T) {
+	const canary = "yaml-credential-canary"
+	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	content := "git_publish_token: " + canary + "\ndry_run: true\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"validate-config", "--config", path}, &stdout, &stderr); code == 0 {
+		t.Fatal("validate-config accepted a YAML credential field")
+	}
+	combined := stdout.String() + stderr.String()
+	if strings.Contains(combined, canary) {
+		t.Fatalf("validate-config leaked YAML credential: %q", combined)
+	}
+}
+
+func TestValidateConfigFailsForLiveModeWithoutPublishCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	content := "dry_run: false\nsources_path: sources.yaml\nruntime_dir: runtime\n" +
+		"public_repo_path: public\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"validate-config", "--config", path}, &stdout, &stderr); code == 0 {
+		t.Fatal("live configuration accepted without publication credential")
+	}
+	if !strings.Contains(stderr.String(), "THEMACHINEWRITES_GIT_PUBLISH_TOKEN") {
+		t.Fatalf("stderr = %q, want missing-credential variable name", stderr.String())
 	}
 }

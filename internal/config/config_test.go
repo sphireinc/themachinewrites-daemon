@@ -67,6 +67,79 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigurationHasNoCredentialsAndStartsDryRun(t *testing.T) {
+	cfg := Default()
+	if !cfg.DryRun {
+		t.Fatal("Default().DryRun = false, want true")
+	}
+	if cfg.PollInterval <= 0 || cfg.CodexTimeout <= 0 {
+		t.Fatalf("Default() durations = %v/%v, want positive", cfg.PollInterval, cfg.CodexTimeout)
+	}
+	dump, err := cfg.MarshalRedacted()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(dump), "quoted_api_key") {
+		t.Fatalf("default configuration contains credential fields: %s", dump)
+	}
+}
+
+func TestLoadEnvyEnvironmentOverridesConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	if err := os.WriteFile(path, []byte("dry_run: true\nsources_path: from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(name string) string {
+		switch name {
+		case "THEMACHINEWRITES_SOURCES_PATH":
+			return "from-environment"
+		case "THEMACHINEWRITES_PUBLIC_REPO_PATH":
+			return "public-repository"
+		}
+		return ""
+	}
+
+	cfg, err := LoadEnvy(path, getenv)
+	if err != nil {
+		t.Fatalf("LoadEnvy() error = %v", err)
+	}
+	if cfg.SourcesPath != "from-environment" {
+		t.Fatalf("SourcesPath = %q, want environment value", cfg.SourcesPath)
+	}
+	if !cfg.DryRun || cfg.PollInterval != Default().PollInterval {
+		t.Fatalf("default fields were not preserved: %#v", cfg)
+	}
+}
+
+func TestLoadEnvyRejectsInvalidYAMLWithoutSecretValues(t *testing.T) {
+	const canary = "yaml-secret-canary"
+	t.Setenv("THEMACHINEWRITES_GIT_PUBLISH_TOKEN", canary)
+	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	if err := os.WriteFile(path, []byte("dry_run: true\nbad: [[\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadEnvy(path, os.Getenv)
+	if err == nil {
+		t.Fatal("LoadEnvy() accepted invalid YAML")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatal("YAML error leaked environment secret")
+	}
+}
+
+func TestLoadEnvyRequiresRuntimeSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	if err := os.WriteFile(path, []byte("dry_run: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadEnvy(path, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "public_repo_path") {
+		t.Fatalf("LoadEnvy() error = %v, want public_repo_path", err)
+	}
+}
+
 func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 	directory := t.TempDir()
 	sources := filepath.Join(directory, "sources.yaml")
@@ -191,6 +264,19 @@ func TestLoadSecretsDoesNotPutCredentialInValidationError(t *testing.T) {
 	}
 	if strings.Contains(errString(secrets.ValidateRequired()), canary) {
 		t.Fatal("secret validation error leaked the publish credential")
+	}
+}
+
+func TestDryRunDoesNotRequirePublishCredential(t *testing.T) {
+	secrets, err := LoadSecrets(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets.ValidateForPublication(false); err != nil {
+		t.Fatalf("dry-run validation error = %v", err)
+	}
+	if err := secrets.ValidateForPublication(true); err == nil {
+		t.Fatal("live publication accepted a missing publish credential")
 	}
 }
 

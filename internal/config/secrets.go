@@ -40,6 +40,13 @@ func LoadSecrets(getenv func(string) string) (Secrets, error) {
 }
 
 func (s Secrets) ValidateRequired() error {
+	return s.ValidateForPublication(true)
+}
+
+func (s Secrets) ValidateForPublication(require bool) error {
+	if !require {
+		return nil
+	}
 	if s.GitPublishToken == "" {
 		return fmt.Errorf("%s is required", gitPublishTokenEnv)
 	}
