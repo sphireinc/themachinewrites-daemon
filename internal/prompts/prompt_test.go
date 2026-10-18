@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,6 +30,22 @@ func TestVersionedBundleIsStableAndOrdersAssets(t *testing.T) {
 	}
 	if !strings.Contains(first.Text, "consciousness") || !strings.Contains(first.Text, "untrusted evidence") {
 		t.Fatalf("bundle lacks identity/trust boundaries:\n%s", first.Text)
+	}
+}
+
+func TestRuntimeAssetsMatchRepositoryPromptSources(t *testing.T) {
+	for _, name := range orderedAssets {
+		runtime, err := promptFiles.ReadFile("assets/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := os.ReadFile(filepath.Join("..", "..", "prompts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(runtime) != string(source) {
+			t.Fatalf("runtime asset %s differs from repository prompt source", name)
+		}
 	}
 }
 
