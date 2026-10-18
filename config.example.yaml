@@ -4,7 +4,7 @@ sources_path: ./sources.yaml
 runtime_dir: ./runtime
 codex_executable: codex
 codex_timeout: 8m
-public_repo_path: /absolute/path/to/themachinewrites-public
+public_repo_path: /replace/with/absolute/public/repository
 budget:
   daily_model_invocations: 12
   daily_input_tokens: 120000
