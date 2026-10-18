@@ -49,3 +49,31 @@ func TestAcknowledgePublicationIsIdempotentForSameSHAAndRejectsDifferentSHA(t *t
 		t.Fatalf("stored state = %s/%s %s/%s", jobState, outboxState, jobSHA, outboxSHA)
 	}
 }
+
+func TestSameSHAReplayRepairsStalePublishingJob(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	const now = "2026-10-18T20:00:00Z"
+	if _, err := store.DB().ExecContext(ctx, `
+        INSERT INTO jobs(job_id, state, post_id, created_at, updated_at)
+        VALUES ('job-stale', 'publishing', 'post-stale', ?, ?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `
+        INSERT INTO publication_outbox(post_id, job_id, state, commit_sha, created_at, updated_at)
+        VALUES ('post-stale', 'job-stale', 'published', 'sha-stale', ?, ?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AcknowledgePublication(ctx, "post-stale", "sha-stale", now); err != nil {
+		t.Fatalf("replay acknowledgement error = %v", err)
+	}
+	var state, sha string
+	if err := store.DB().QueryRowContext(ctx,
+		"SELECT state, commit_sha FROM jobs WHERE job_id = 'job-stale'").Scan(&state, &sha); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || sha != "sha-stale" {
+		t.Fatalf("job = %s/%s, want published/sha-stale", state, sha)
+	}
+}
