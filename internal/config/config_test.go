@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -147,4 +148,55 @@ func TestValidateFeedURLRequiresHTTPSExceptLocalFixtures(t *testing.T) {
 			t.Errorf("validateFeedURL(%q, %v) error = %v, shouldError = %v", tt.raw, tt.allowLocal, err, tt.shouldError)
 		}
 	}
+}
+
+func TestSecretsLoadOnlyFromEnvironment(t *testing.T) {
+	const canary = "canary-publish-credential"
+	t.Setenv("THEMACHINEWRITES_GIT_PUBLISH_TOKEN", canary)
+
+	secrets, err := LoadSecrets(os.Getenv)
+	if err != nil {
+		t.Fatalf("LoadSecrets() error = %v", err)
+	}
+	if got := secrets.GitPublishToken.Reveal(); got != canary {
+		t.Fatalf("GitPublishToken = %q, want canary", got)
+	}
+	if strings.Contains(secrets.String(), canary) || strings.Contains(fmt.Sprint(secrets), canary) {
+		t.Fatal("formatted secrets leaked the credential")
+	}
+
+	cfg := Config{
+		SourcesPath:     "sources.yaml",
+		RuntimeDir:      "runtime",
+		CodexExecutable: "codex",
+		PublicRepoPath:  "public",
+	}
+	dump, err := cfg.MarshalRedacted()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(dump), canary) {
+		t.Fatal("configuration dump leaked the credential")
+	}
+}
+
+func TestLoadSecretsDoesNotPutCredentialInValidationError(t *testing.T) {
+	const canary = "do-not-print-this-token"
+	t.Setenv("THEMACHINEWRITES_GIT_PUBLISH_TOKEN", canary)
+	t.Setenv("THEMACHINEWRITES_RESEARCH_TOKEN", "research-canary")
+
+	secrets, err := LoadSecrets(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(errString(secrets.ValidateRequired()), canary) {
+		t.Fatal("secret validation error leaked the publish credential")
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
