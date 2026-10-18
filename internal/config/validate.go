@@ -47,6 +47,9 @@ func (c Config) Validate() error {
 	if c.Budget.MaxAttempts < 1 || c.Budget.MaxAttempts > 10 {
 		problems = append(problems, errors.New("budget.max_attempts must be between 1 and 10"))
 	}
+	if !c.DryRun && !filepath.IsAbs(c.PublicRepoPath) {
+		problems = append(problems, errors.New("public_repo_path must be absolute when dry_run is false"))
+	}
 	return errors.Join(problems...)
 }
 

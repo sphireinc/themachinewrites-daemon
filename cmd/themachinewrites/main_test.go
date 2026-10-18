@@ -84,9 +84,14 @@ func TestValidateConfigFailureDoesNotLeakYAMLCredential(t *testing.T) {
 }
 
 func TestValidateConfigFailsForLiveModeWithoutPublishCredential(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "daemon.yaml")
+	directory := t.TempDir()
+	repository := filepath.Join(directory, "public")
+	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "daemon.yaml")
 	content := "dry_run: false\nsources_path: sources.yaml\nruntime_dir: runtime\n" +
-		"public_repo_path: public\n"
+		"public_repo_path: " + repository + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

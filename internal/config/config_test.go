@@ -280,6 +280,16 @@ func TestDryRunDoesNotRequirePublishCredential(t *testing.T) {
 	}
 }
 
+func TestLiveModeRequiresAbsolutePublicRepositoryPath(t *testing.T) {
+	cfg := Default()
+	cfg.DryRun = false
+	cfg.PublicRepoPath = "./themachinewrites-public"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "public_repo_path must be absolute") {
+		t.Fatalf("Validate() error = %v, want absolute public_repo_path rejection", err)
+	}
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""
