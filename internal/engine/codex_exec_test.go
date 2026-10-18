@@ -20,6 +20,7 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 		Environment:    []string{"PATH=/usr/bin:/bin", "HOME=/private/tmp/home"},
 		Runner:         runner,
 		TempDir:        t.TempDir(),
+		Workspace:      t.TempDir(),
 	}
 	output, err := exec.Run(context.Background(), Input{Instructions: "trusted instructions", Bundle: `{"items":[]}`})
 	if err != nil {
@@ -29,7 +30,7 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 		t.Fatalf("stdout = %q", output.Stdout)
 	}
 	args := strings.Join(runner.args, " ")
-	for _, required := range []string{"exec", "--sandbox read-only", "--ephemeral", "--json", "--output-schema", "--output-last-message", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "-"} {
+	for _, required := range []string{"exec", "--sandbox read-only", "--ephemeral", "--json", "--output-schema", "--output-last-message", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--cd", "-"} {
 		if !strings.Contains(args, required) {
 			t.Errorf("args %q missing %q", args, required)
 		}
@@ -47,6 +48,7 @@ func TestCodexExecCancelsHungProcess(t *testing.T) {
 		MaxOutputBytes: 4096,
 		Runner:         &hangingRunner{},
 		TempDir:        t.TempDir(),
+		Workspace:      t.TempDir(),
 	}
 	started := time.Now()
 	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
@@ -63,11 +65,30 @@ func TestCodexExecRejectsEnvironmentCredentialCanary(t *testing.T) {
 	exec := CodexExec{
 		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
 		Environment: []string{"PATH=/usr/bin", "THEMACHINEWRITES_GIT_PUBLISH_TOKEN=" + token},
-		Runner:      &recordingRunner{result: []byte(`{}`)}, TempDir: t.TempDir(),
+		Runner:      &recordingRunner{result: []byte(`{}`)}, TempDir: t.TempDir(), Workspace: t.TempDir(),
 	}
 	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
 	if err == nil || strings.Contains(err.Error(), token) {
 		t.Fatalf("Run() error = %v, want redacted environment rejection", err)
+	}
+}
+
+func TestCodexExecRejectsUnapprovedEnvironmentAndRequiresEmptyWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"No."}`)}
+	exec := CodexExec{
+		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		Workspace: workspace, Environment: []string{"PATH=/usr/bin", "MY_TOKEN_ALIAS=secret-value"},
+		Runner: runner, TempDir: t.TempDir(),
+	}
+	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
+	if err == nil || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("Run() error = %v, want unapproved environment rejection", err)
+	}
+	exec.Environment = []string{"PATH=/usr/bin"}
+	exec.Workspace = ""
+	if _, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"}); err == nil {
+		t.Fatal("Run() accepted missing isolated workspace")
 	}
 }
 
