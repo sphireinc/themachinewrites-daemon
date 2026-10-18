@@ -38,6 +38,10 @@ type Fetcher struct {
 
 func NewFetcher(validator *URLValidator) *Fetcher {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if validator != nil {
+		transport.DialContext = validator.DialContext
+		transport.TLSClientConfig = validator.TLSConfig("")
+	}
 	return &Fetcher{
 		Client:       &http.Client{Transport: transport},
 		MaxBytes:     2 << 20,
@@ -82,6 +86,12 @@ func (f *Fetcher) Fetch(ctx context.Context, target *url.URL, cursor Cursor) (Fe
 		}
 		if strings.TrimSpace(next.URL.Scheme) == "" || next.URL.Hostname() == "" {
 			return fmt.Errorf("invalid redirect URL")
+		}
+		if len(via) > 0 && !strings.EqualFold(via[len(via)-1].URL.Hostname(), next.URL.Hostname()) {
+			next.Header.Del("If-None-Match")
+			next.Header.Del("If-Modified-Since")
+			next.Header.Del("Authorization")
+			next.Header.Del("Cookie")
 		}
 		return f.Validator.Check(next.Context(), next.URL)
 	}

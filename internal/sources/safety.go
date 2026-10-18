@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -73,4 +74,39 @@ func unsafeIP(ip net.IP) bool {
 		ip.IsMulticast() ||
 		ip.IsUnspecified() ||
 		strings.EqualFold(ip.String(), "169.254.169.254")
+}
+
+func (v *URLValidator) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parse dial address: %w", err)
+	}
+	if v == nil || strings.TrimSpace(host) == "" {
+		return nil, fmt.Errorf("%w: dial host is required", ErrUnsafeURL)
+	}
+	localHost := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	addresses, err := v.Resolve(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve host: %v", ErrUnsafeURL, err)
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("%w: host resolved to no addresses", ErrUnsafeURL)
+	}
+	dialer := &net.Dialer{}
+	var lastErr error
+	for _, ip := range addresses {
+		if !(v.AllowLocalFixtures && localHost) && unsafeIP(ip) {
+			return nil, fmt.Errorf("%w: host resolves to a private or special-use address", ErrUnsafeURL)
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("dial resolved addresses: %w", lastErr)
+}
+
+func (v *URLValidator) TLSConfig(serverName string) *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
 }

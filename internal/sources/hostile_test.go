@@ -107,4 +107,51 @@ func TestParseRSSBoundsHeadlineAndExcerpt(t *testing.T) {
 	}
 }
 
+func TestEmptyRSSAndAtomFeedsAreValidZeroObservationResults(t *testing.T) {
+	for _, fixture := range []string{
+		`<rss version="2.0"><channel><title></title></channel></rss>`,
+		`<feed xmlns="http://www.w3.org/2005/Atom"><title></title></feed>`,
+	} {
+		items, err := parseFeed([]byte(fixture), testSource(t, "source", "Source"), time.Now().UTC())
+		if err != nil || len(items) != 0 {
+			t.Errorf("parseFeed(%q) = %d observations, %v; want empty success", fixture, len(items), err)
+		}
+	}
+}
+
+func TestFetcherStripsConditionalHeadersOnCrossHostRedirect(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "redirect.example" {
+			if request.Header.Get("If-None-Match") != `"etag-one"` {
+				t.Fatal("initial conditional header was not sent")
+			}
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://other.example/feed"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		}
+		if request.Header.Get("If-None-Match") != "" || request.Header.Get("If-Modified-Since") != "" {
+			t.Fatalf("conditional headers leaked across hosts: %#v", request.Header)
+		}
+		return response(request, http.StatusOK, "<rss/>"), nil
+	})}
+	fetcher := testFetcher(client)
+	if _, err := fetcher.Fetch(context.Background(), mustURL(t, "https://redirect.example/feed"), Cursor{
+		ETag: `"etag-one"`, LastModified: "Sun, 18 Oct 2026 20:00:00 GMT",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollJoinsCursorFailureContext(t *testing.T) {
+	cursors := &failingCursorStore{fakeCursorStore: fakeCursorStore{cursor: CursorState{ETag: "old"}, found: true}}
+	_, err := Poll(context.Background(), testSource(t, "source", "Source"),
+		&fakeFetcher{err: errors.New("network failure")}, cursors, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "network failure") || !strings.Contains(err.Error(), "record source failure") {
+		t.Fatalf("Poll() error = %v, want fetch and cursor errors", err)
+	}
+}
+
 var _ = url.URL{}
