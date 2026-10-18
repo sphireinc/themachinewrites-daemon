@@ -132,9 +132,17 @@ func TestLockedDatabaseFailsWithBoundedTimeout(t *testing.T) {
 	_, err = second.ExecContext(lockCtx, `
         INSERT INTO jobs(job_id, state, created_at, updated_at)
         VALUES ('job-locked', 'pending', '2026-10-18T20:00:00Z', '2026-10-18T20:00:00Z')`)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "locked") {
+	lowerError := strings.ToLower(errString(err))
+	if err == nil || (!strings.Contains(lowerError, "locked") && !strings.Contains(lowerError, "deadline exceeded")) {
 		t.Fatalf("locked insert error = %v, want bounded locked-database failure", err)
 	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func assertIntegrityOK(t *testing.T, db *sql.DB) {

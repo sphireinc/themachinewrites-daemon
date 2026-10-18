@@ -28,6 +28,14 @@ type fakeCursorStore struct {
 	failureText string
 }
 
+type failingCursorStore struct {
+	fakeCursorStore
+}
+
+func (s *failingCursorStore) RecordSourceFailure(context.Context, string, time.Time, string) error {
+	return errors.New("cursor write failed")
+}
+
 func (s *fakeCursorStore) SourceCursor(context.Context, string) (CursorState, bool, error) {
 	return s.cursor, s.found, nil
 }

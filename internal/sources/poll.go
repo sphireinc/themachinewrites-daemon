@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/url"
@@ -39,16 +40,16 @@ func Poll(ctx context.Context, source Source, fetcher FeedFetcher, cursors Curso
 	}
 	fetched, err := fetcher.Fetch(ctx, source.URL.Parsed(), Cursor{ETag: cursor.ETag, LastModified: cursor.LastModified})
 	if err != nil {
-		_ = cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
-		return PollResult{}, err
+		recordErr := cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
+		return PollResult{}, errors.Join(err, wrapCursorFailure(recordErr))
 	}
 	if fetched.NotModified {
 		return PollResult{NotModified: true}, nil
 	}
 	observations, err := parseFeed(fetched.Body, source, now)
 	if err != nil {
-		_ = cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
-		return PollResult{}, err
+		recordErr := cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
+		return PollResult{}, errors.Join(err, wrapCursorFailure(recordErr))
 	}
 	if err := cursors.AdvanceSourceCursor(ctx, source.ID, fetched.ETag, fetched.LastModified, now); err != nil {
 		return PollResult{}, err
@@ -58,12 +59,50 @@ func Poll(ctx context.Context, source Source, fetcher FeedFetcher, cursors Curso
 
 func parseFeed(content []byte, source Source, retrievedAt time.Time) ([]Observation, error) {
 	trimmed := strings.TrimSpace(string(content))
-	switch {
-	case strings.Contains(trimmed, "<feed") && strings.Contains(trimmed, "http://www.w3.org/2005/Atom"):
-		return ParseAtom(content, source, retrievedAt)
-	case strings.Contains(trimmed, "<rss"):
-		return ParseRSS(content, source, retrievedAt)
-	default:
-		return nil, fmt.Errorf("unsupported feed format")
+	if !strings.HasPrefix(trimmed, "<?xml") && !strings.HasPrefix(trimmed, "<") {
+		return nil, errors.New("unsupported feed format")
 	}
+	root, namespace := feedRootDetails(content)
+	if root == "" {
+		return nil, errors.New("feed root is missing")
+	}
+	switch root {
+	case "rss", "RDF":
+		return ParseRSS(content, source, retrievedAt)
+	case "feed":
+		if namespace != "http://www.w3.org/2005/Atom" {
+			return nil, fmt.Errorf("unsupported Atom namespace %q", namespace)
+		}
+		return ParseAtom(content, source, retrievedAt)
+	default:
+		return nil, fmt.Errorf("unsupported feed format %q", root)
+	}
+}
+
+func feedRoot(content []byte) (string, error) {
+	name, _ := feedRootDetails(content)
+	if name == "" {
+		return "", errors.New("feed root is missing")
+	}
+	return name, nil
+}
+
+func feedRootDetails(content []byte) (string, string) {
+	decoder := xml.NewDecoder(strings.NewReader(string(content)))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", ""
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			return start.Name.Local, start.Name.Space
+		}
+	}
+}
+
+func wrapCursorFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("record source failure: %w", err)
 }
