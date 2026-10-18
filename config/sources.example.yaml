@@ -1,0 +1,8 @@
+# Curated public feeds only. This file contains no credentials.
+sources:
+  - id: example-news
+    url: https://example.org/feed.xml
+    enabled: false
+    request_interval: 15m
+    name: Example News
+    category: general
