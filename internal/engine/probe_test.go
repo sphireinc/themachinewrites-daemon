@@ -9,6 +9,9 @@ import (
 
 func TestProbeAcceptsSupportedCodexCLI(t *testing.T) {
 	runner := func(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+		if len(args) > 2 && args[0] == "exec" && args[1] == "--config" {
+			return []byte("Usage: codex exec"), nil, nil
+		}
 		if len(args) > 0 && args[0] == "exec" {
 			return []byte("--output-schema --output-last-message --json --sandbox"), nil, nil
 		}
@@ -20,6 +23,22 @@ func TestProbeAcceptsSupportedCodexCLI(t *testing.T) {
 	}
 	if compatibility.Version != "0.163.0" || !compatibility.SupportsExec {
 		t.Fatalf("compatibility = %#v", compatibility)
+	}
+}
+
+func TestProbeRejectsUnsupportedSecurityPolicy(t *testing.T) {
+	runner := func(_ context.Context, _ string, args ...string) ([]byte, []byte, error) {
+		if len(args) > 2 && args[1] == "--config" {
+			return nil, []byte("unknown configuration field"), errors.New("exit status 1")
+		}
+		if len(args) > 0 && args[0] == "exec" {
+			return []byte("--output-schema --output-last-message --json --sandbox"), nil, nil
+		}
+		return []byte("codex-cli 0.163.0\n"), nil, nil
+	}
+	_, err := Probe(context.Background(), "codex", runner)
+	if err == nil || !strings.Contains(err.Error(), "security policy") {
+		t.Fatalf("Probe() error = %v, want unsupported security policy", err)
 	}
 }
 

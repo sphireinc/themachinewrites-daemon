@@ -17,9 +17,10 @@ func TestFakeCodexRunnerCanEmitDeferWithoutRemoteCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root, workspace, tempDir := codexSandboxDirs(t)
 	exec := CodexExec{
 		Executable: goBinary, Sandbox: "read-only", Timeout: 10 * time.Second,
-		MaxOutputBytes: 64 * 1024, TempDir: t.TempDir(), Workspace: t.TempDir(),
+		MaxOutputBytes: 64 * 1024, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
 		Runner: &commandProcessRunner{prefix: []string{"run", executable}},
 	}
 	output, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{"items":[]}`})

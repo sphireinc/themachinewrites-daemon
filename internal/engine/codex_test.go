@@ -15,9 +15,10 @@ func TestCodexEngineRequiresCurrentPromptVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"No meaningful contribution."}`)}
+	root, workspace, tempDir := codexSandboxDirs(t)
 	engine := CodexEngine{Exec: CodexExec{
 		Executable: "codex", Sandbox: "read-only", Timeout: time.Second,
-		MaxOutputBytes: 4096, Runner: runner, TempDir: t.TempDir(), Workspace: t.TempDir(),
+		MaxOutputBytes: 4096, Runner: runner, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
 	}}
 	proposal, err := engine.Run(context.Background(), Input{
 		Instructions: bundle.Text, Bundle: `{"items":[]}`, PromptVersion: bundle.Version,

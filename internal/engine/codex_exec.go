@@ -24,6 +24,8 @@ func (r *commandProcessRunner) Run(ctx context.Context, executable string, args,
 	commandArgs := append(append([]string(nil), r.prefix...), args...)
 	command := exec.CommandContext(ctx, executable, commandArgs...)
 	command.Env = env
+	command.Dir = workingDirectory(env)
+	command.WaitDelay = 2 * time.Second
 	command.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -38,6 +40,7 @@ type CodexExec struct {
 	MaxOutputBytes int
 	Environment    []string
 	Workspace      string
+	SandboxRoot    string
 	Runner         processRunner
 	TempDir        string
 }
@@ -57,33 +60,15 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 	if c.Timeout <= 0 || c.MaxOutputBytes <= 0 || c.Runner == nil {
 		return ExecOutput{}, errors.New("codex execution limits are not configured")
 	}
-	if strings.TrimSpace(c.Workspace) == "" {
-		return ExecOutput{}, errors.New("isolated Codex workspace is required")
-	}
-	if err := requireEmptyDirectory(c.Workspace); err != nil {
+	if err := validateSandboxPaths(c.SandboxRoot, c.Workspace, c.TempDir); err != nil {
 		return ExecOutput{}, err
 	}
-	environment := c.Environment
-	if environment == nil {
-		environment = minimalEnvironment(os.Environ())
+	environment, err := isolatedEnvironment(c.Environment, os.Environ(), filepath.Join(c.SandboxRoot, "home"), c.TempDir)
+	if err != nil {
+		return ExecOutput{}, err
 	}
-	for _, entry := range environment {
-		key, _, _ := strings.Cut(entry, "=")
-		if !allowedCodexEnvironment[key] {
-			return ExecOutput{}, errors.New("codex environment contains a variable outside the allowlist")
-		}
-	}
-	tempDir := c.TempDir
-	if tempDir == "" {
-		var err error
-		tempDir, err = os.MkdirTemp("", "themachinewrites-codex-")
-		if err != nil {
-			return ExecOutput{}, fmt.Errorf("create codex temp dir: %w", err)
-		}
-		defer os.RemoveAll(tempDir)
-	}
-	schemaPath := filepath.Join(tempDir, "proposal.schema.json")
-	outputPath := filepath.Join(tempDir, "last-message.json")
+	schemaPath := filepath.Join(c.TempDir, "proposal.schema.json")
+	outputPath := filepath.Join(c.TempDir, "last-message.json")
 	if err := os.WriteFile(schemaPath, proposalSchema, 0o600); err != nil {
 		return ExecOutput{}, fmt.Errorf("write proposal schema: %w", err)
 	}
@@ -91,6 +76,8 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 	prompt := "TRUSTED INSTRUCTIONS:\n" + input.Instructions + "\n\nUNTRUSTED SOURCE DATA:\n" + input.Bundle + "\n"
 	args := []string{
 		"exec", "--sandbox", c.Sandbox, "--ephemeral", "--json",
+		"--config", `approval_policy="never"`, "--config", `web_search="disabled"`,
+		"--config", "sandbox_workspace_write.network_access=false",
 		"--output-schema", schemaPath, "--output-last-message", outputPath,
 		"--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--cd", c.Workspace, "-",
 	}
@@ -113,15 +100,45 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 	return ExecOutput{Stdout: stdout, Stderr: stderr}, nil
 }
 
-func minimalEnvironment(environment []string) []string {
-	var result []string
-	for _, entry := range environment {
-		key, _, _ := strings.Cut(entry, "=")
-		if allowedCodexEnvironment[key] {
-			result = append(result, entry)
+func isolatedEnvironment(override, parent []string, home, tempDir string) ([]string, error) {
+	source := parent
+	if override != nil {
+		source = override
+	}
+	values := make(map[string]string)
+	for _, entry := range source {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || !allowedCodexEnvironment[key] {
+			continue
+		}
+		if key != "HOME" && key != "TMPDIR" {
+			values[key] = value
 		}
 	}
-	return result
+	values["HOME"] = home
+	values["TMPDIR"] = tempDir
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, fmt.Errorf("create isolated Codex home: %w", err)
+	}
+	if override != nil {
+		for _, entry := range override {
+			key, value, ok := strings.Cut(entry, "=")
+			if !ok || !allowedCodexEnvironment[key] {
+				return nil, errors.New("codex environment contains a variable outside the allowlist")
+			}
+			if key != "HOME" && key != "TMPDIR" {
+				values[key] = value
+			}
+		}
+	}
+	keys := []string{"PATH", "USER", "LANG", "LC_ALL", "GOCACHE", "GOMODCACHE", "HOME", "TMPDIR"}
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			result = append(result, key+"="+value)
+		}
+	}
+	return result, nil
 }
 
 var allowedCodexEnvironment = map[string]bool{
@@ -129,17 +146,46 @@ var allowedCodexEnvironment = map[string]bool{
 	"GOCACHE": true, "GOMODCACHE": true,
 }
 
-func requireEmptyDirectory(path string) error {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return errors.New("isolated Codex workspace must be an existing directory")
+func validateSandboxPaths(root, workspace, tempDir string) error {
+	home := filepath.Join(root, "home")
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(workspace) == "" || strings.TrimSpace(tempDir) == "" {
+		return errors.New("isolated Codex root, workspace and temp directories are required")
 	}
-	entries, err := os.ReadDir(path)
+	cleanRoot, err := filepath.Abs(root)
 	if err != nil {
-		return fmt.Errorf("inspect Codex workspace: %w", err)
+		return errors.New("isolated Codex root is invalid")
 	}
-	if len(entries) != 0 {
-		return errors.New("isolated Codex workspace must be empty")
+	for name, path := range map[string]string{"workspace": workspace, "temp directory": tempDir, "home directory": home} {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("isolated Codex %s is invalid", name)
+		}
+		relative, err := filepath.Rel(cleanRoot, absolute)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("isolated Codex %s must be inside the sandbox root", name)
+		}
+		info, err := os.Stat(absolute)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("isolated Codex %s must be an existing directory", name)
+		}
+		if name == "workspace" {
+			entries, err := os.ReadDir(absolute)
+			if err != nil {
+				return fmt.Errorf("inspect Codex workspace: %w", err)
+			}
+			if len(entries) != 0 {
+				return errors.New("isolated Codex workspace must be empty")
+			}
+		}
 	}
 	return nil
+}
+
+func workingDirectory(environment []string) string {
+	for _, entry := range environment {
+		if value, ok := strings.CutPrefix(entry, "TMPDIR="); ok {
+			return value
+		}
+	}
+	return ""
 }
