@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 )
 
 func ValidateCitations(proposal engine.Proposal) error {
@@ -36,7 +37,10 @@ func ValidateCitations(proposal engine.Proposal) error {
 		if _, err := time.Parse(time.RFC3339Nano, source.RetrievedAt); err != nil {
 			return fmt.Errorf("source %d retrieved_at must be RFC3339", index+1)
 		}
-		key := strings.ToLower(parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath())
+		key, err := observations.CanonicalizeURL(source.URL)
+		if err != nil {
+			return fmt.Errorf("source %d URL cannot be canonicalized: %w", index+1, err)
+		}
 		if _, duplicate := seen[key]; duplicate {
 			return fmt.Errorf("source %d duplicates an earlier citation", index+1)
 		}

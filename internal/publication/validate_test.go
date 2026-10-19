@@ -19,6 +19,8 @@ func TestValidateContentBounds(t *testing.T) {
 		{name: "blank title", edit: func(p *engine.Proposal) { p.Title = "     " }},
 		{name: "short title", edit: func(p *engine.Proposal) { p.Title = "four" }},
 		{name: "oversize title", edit: func(p *engine.Proposal) { p.Title = strings.Repeat("x", 161) }},
+		{name: "format control title", edit: func(p *engine.Proposal) { p.Title = "Safe\u202Etitle" }},
+		{name: "line separator title", edit: func(p *engine.Proposal) { p.Title = "Safe\u2028title" }},
 		{name: "blank body", edit: func(p *engine.Proposal) { p.Body = " \n " }},
 		{name: "oversize body", edit: func(p *engine.Proposal) { p.Body = strings.Repeat("x", 20001) }},
 	}

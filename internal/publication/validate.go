@@ -18,8 +18,8 @@ func ValidateProposal(proposal engine.Proposal) error {
 		return errors.New("title must contain 5–160 valid UTF-8 characters")
 	}
 	for _, r := range proposal.Title {
-		if unicode.IsControl(r) || r == '<' || r == '>' {
-			return errors.New("title must be plain text without controls or angle brackets")
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || r == '<' || r == '>' {
+			return errors.New("title must be single-line plain text without formatting controls or angle brackets")
 		}
 	}
 	if strings.TrimSpace(proposal.Title) == "" {

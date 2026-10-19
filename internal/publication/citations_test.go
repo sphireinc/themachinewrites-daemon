@@ -36,4 +36,13 @@ func TestValidateCitationsRejectsUnsafeAndMismatchedSources(t *testing.T) {
 	if err := ValidateCitations(missing); err == nil {
 		t.Fatal("missing citations accepted")
 	}
+	duplicate := base
+	duplicate.Sources = append([]engine.Source(nil), base.Sources...)
+	duplicate.Sources = append(duplicate.Sources, engine.Source{
+		Title: "Syndicated copy", URL: "https://example.org/source?utm_source=feed",
+		RetrievedAt: "2026-10-18T20:01:00Z",
+	})
+	if err := ValidateCitations(duplicate); err == nil {
+		t.Fatal("tracking variant duplicate accepted")
+	}
 }
