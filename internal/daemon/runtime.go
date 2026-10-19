@@ -255,7 +255,7 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	result, err := gitpub.Publish(ctx, r.Publisher, r.Outbox, gitpub.PublishRequest{PostID: postID, Paths: paths, MaxPushAttempts: 3})
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
 		return err
 	}
 	if err := r.Store.SetCandidateDecision(ctx, fingerprints, "published", r.now()); err != nil {
