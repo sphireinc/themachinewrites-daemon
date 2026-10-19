@@ -154,6 +154,60 @@ func TestRestorePublicationAcknowledgementRejectsDifferentCommit(t *testing.T) {
 	}
 }
 
+func TestReconcilePublicNeverCopiesPrivateObservationPayloadIntoPublicTree(t *testing.T) {
+	ctx := context.Background()
+	public, remote := createReconcileRepository(t)
+	createPublishedFixtures(t, public)
+	commitReconcileFixture(t, public, "seed public history")
+
+	database := filepath.Join(t.TempDir(), "runtime.sqlite")
+	runtime, err := store.Open(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	observedAt := "2026-10-19T00:00:00Z"
+	if _, err := runtime.ObserveItem(ctx, store.ObservedItem{
+		URLCanonicalHash: "private-url-hash",
+		SourceID:         "private-source-id",
+		DiscoveredAt:     observedAt,
+		Fingerprint:      "private-observation-fingerprint",
+		LastSeenAt:       observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	privatePayload := "PRIVATE-OBSERVATION-SECRET-8fc2a740"
+	if _, err := runtime.DB().ExecContext(ctx, `
+		UPDATE observed_items
+		SET headline = ?, source_name = ?, excerpt = ?, url = ?
+		WHERE fingerprint = ?`,
+		privatePayload, privatePayload, privatePayload, "https://private.example/"+privatePayload,
+		"private-observation-fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := OpenRepository(ctx, RepositoryConfig{
+		Root: public, Branch: "main", Remote: "origin", ExpectedRemote: remote,
+	}, commandRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcilePublic(ctx, repo, runtime); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := strings.Split(runGit(t, remote, "ls-tree", "-r", "--name-only", "refs/heads/main"), "\n")
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		content := runGit(t, remote, "show", "refs/heads/main:"+path)
+		if strings.Contains(content, privatePayload) {
+			t.Fatalf("private observation payload was copied to public path %q", path)
+		}
+	}
+}
+
 func createReconcileRepository(t *testing.T) (string, string) {
 	t.Helper()
 	if _, err := os.Stat("/usr/bin/git"); err != nil {
