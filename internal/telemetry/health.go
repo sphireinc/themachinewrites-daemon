@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const maxHealthSnapshotBytes = 16 * 1024
 
 type Health struct {
 	SchemaVersion     int        `json:"schema_version"`
@@ -25,9 +28,17 @@ func ReadHealth(path string) (Health, error) {
 	if strings.TrimSpace(path) == "" {
 		return Health{}, errors.New("health path is required")
 	}
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return Health{}, fmt.Errorf("read health snapshot: %w", err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxHealthSnapshotBytes+1))
+	if err != nil {
+		return Health{}, fmt.Errorf("read health snapshot: %w", err)
+	}
+	if len(content) > maxHealthSnapshotBytes {
+		return Health{}, errors.New("health snapshot exceeds size limit")
 	}
 	var health Health
 	if err := json.Unmarshal(content, &health); err != nil {
@@ -35,6 +46,9 @@ func ReadHealth(path string) (Health, error) {
 	}
 	if health.SchemaVersion != 1 {
 		return Health{}, errors.New("unsupported health snapshot schema")
+	}
+	if err := validateHealthLabels(health); err != nil {
+		return Health{}, err
 	}
 	return health.Clone(), nil
 }
@@ -45,6 +59,9 @@ func WriteHealth(path string, health Health) error {
 	}
 	health = health.Clone()
 	health.SchemaVersion = 1
+	if err := validateHealthLabels(health); err != nil {
+		return err
+	}
 	content, err := json.MarshalIndent(health, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode health snapshot: %w", err)
@@ -86,6 +103,31 @@ func WriteHealth(path string, health Health) error {
 		return fmt.Errorf("sync health directory: %w", err)
 	}
 	return nil
+}
+
+func validateHealthLabels(health Health) error {
+	if !validHealthLabel(health.LastErrorKind, 64) {
+		return errors.New("last_error_kind must be a bounded machine label")
+	}
+	if !validHealthLabel(health.PausedReason, 64) {
+		return errors.New("paused_reason must be a bounded machine label")
+	}
+	return nil
+}
+
+func validHealthLabel(value string, maximum int) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (h Health) Clone() Health {
