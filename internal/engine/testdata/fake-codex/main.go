@@ -10,8 +10,9 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "defer", "defer|publish|canary|crash|hang|rate-limit|auth")
+	mode := flag.String("mode", "defer", "defer|publish|canary|filesystem-canary|crash|hang|rate-limit|auth")
 	output := flag.String("output", "", "last-message output path")
+	canary := flag.String("canary", "", "filesystem canary path")
 	flag.String("output-last-message", "", "codex-compatible output path")
 	flag.Parse()
 	for index, arg := range os.Args {
@@ -31,6 +32,10 @@ func main() {
 			"cwd":                   workingDirectory,
 			"publish_token_present": os.Getenv("THEMACHINEWRITES_GIT_PUBLISH_TOKEN") != "",
 		})
+		write(*output, string(value))
+	case "filesystem-canary":
+		_, readErr := os.ReadFile(*canary)
+		value, _ := json.Marshal(map[string]any{"canary_readable": readErr == nil})
 		write(*output, string(value))
 	case "crash":
 		fmt.Fprintln(os.Stderr, "fixture crash")

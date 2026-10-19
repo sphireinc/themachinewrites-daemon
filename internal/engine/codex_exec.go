@@ -17,32 +17,75 @@ type processRunner interface {
 }
 
 type commandProcessRunner struct {
-	prefix []string
+	prefix          []string
+	deniedReadPaths []string
 }
 
 func (r *commandProcessRunner) Run(ctx context.Context, executable string, args, env []string, stdin []byte) ([]byte, []byte, error) {
-	commandArgs := append(append([]string(nil), r.prefix...), args...)
-	command := exec.CommandContext(ctx, executable, commandArgs...)
+	commandName, commandArgs, err := commandInvocation(executable, append(append([]string(nil), r.prefix...), args...), r.deniedReadPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+	command := exec.CommandContext(ctx, commandName, commandArgs...)
 	command.Env = env
 	command.Dir = workingDirectory(env)
 	command.WaitDelay = 2 * time.Second
 	command.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
+	err = command.Run()
 	return stdout.Bytes(), stderr.Bytes(), err
 }
 
+var sandboxExecutable = "sandbox-exec"
+
+func commandInvocation(executable string, args, deniedReadPaths []string) (string, []string, error) {
+	if len(deniedReadPaths) == 0 {
+		return executable, args, nil
+	}
+	for _, path := range deniedReadPaths {
+		if !filepath.IsAbs(path) {
+			return "", nil, errors.New("sandbox denied read path must be absolute")
+		}
+		if _, err := filepath.EvalSymlinks(path); err != nil {
+			return "", nil, errors.New("sandbox denied read path does not exist")
+		}
+	}
+	profile, err := macOSSandboxProfile(deniedReadPaths)
+	if err != nil {
+		return "", nil, err
+	}
+	wrapped := []string{"-p", profile, executable}
+	return sandboxExecutable, append(wrapped, args...), nil
+}
+
+func macOSSandboxProfile(paths []string) (string, error) {
+	clauses := make([]string, 0, len(paths))
+	for _, path := range paths {
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", errors.New("sandbox denied read path does not exist")
+		}
+		path = canonical
+		if strings.ContainsAny(path, "\"\r\n") {
+			return "", errors.New("sandbox denied read path contains unsupported characters")
+		}
+		clauses = append(clauses, `(subpath "`+path+`")`)
+	}
+	return "(version 1)(allow default)(deny file-read-data " + strings.Join(clauses, " ") + ")", nil
+}
+
 type CodexExec struct {
-	Executable     string
-	Sandbox        string
-	Timeout        time.Duration
-	MaxOutputBytes int
-	Environment    []string
-	Workspace      string
-	SandboxRoot    string
-	Runner         processRunner
-	TempDir        string
+	Executable      string
+	Sandbox         string
+	Timeout         time.Duration
+	MaxOutputBytes  int
+	Environment     []string
+	Workspace       string
+	SandboxRoot     string
+	DeniedReadPaths []string
+	Runner          processRunner
+	TempDir         string
 }
 
 type ExecOutput struct {
@@ -80,6 +123,9 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 		"--config", "sandbox_workspace_write.network_access=false",
 		"--output-schema", schemaPath, "--output-last-message", outputPath,
 		"--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--cd", c.Workspace, "-",
+	}
+	if commandRunner, ok := c.Runner.(*commandProcessRunner); ok && len(c.DeniedReadPaths) > 0 {
+		commandRunner.deniedReadPaths = append([]string(nil), c.DeniedReadPaths...)
 	}
 	processCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
