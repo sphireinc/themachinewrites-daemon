@@ -34,7 +34,7 @@ func TestCleanHostReplacementReconstructsAndRestartsSupervisor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runRecoveryGit(t, base, "init", "--bare", remote)
+	runRecoveryGit(t, base, "init", "--bare", "--initial-branch=main", remote)
 	runRecoveryGit(t, base, "-c", "init.defaultBranch=main", "init", oldPublic)
 	runRecoveryGit(t, oldPublic, "config", "user.email", "test@example.org")
 	runRecoveryGit(t, oldPublic, "config", "user.name", "Test")
@@ -79,6 +79,9 @@ func TestCleanHostReplacementReconstructsAndRestartsSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	runRecoveryGit(t, base, "clone", remote, newPublic)
+	if branch := strings.TrimSpace(runRecoveryGit(t, newPublic, "branch", "--show-current")); branch != "main" {
+		t.Fatalf("replacement clone branch = %q, want main", branch)
+	}
 	newPublic, err = filepath.EvalSymlinks(newPublic)
 	if err != nil {
 		t.Fatal(err)

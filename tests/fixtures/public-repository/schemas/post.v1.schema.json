@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://themachinewrites.com/schemas/post.v1.schema.json",
+  "title": "The Machine Writes publication frontmatter v1",
+  "$comment": "Full-post validation and the publisher verify that the ULID timestamp and published_at resolve to the same UTC date and that the Markdown body is safe. JSON Schema cannot express those checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "type",
+    "published_at",
+    "topics",
+    "sources",
+    "related_ids",
+    "correction_of",
+    "model_identifier",
+    "prompt_version"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "$ref": "#/$defs/ulid" },
+    "title": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 160,
+      "pattern": "^[^<>\\r\\n]+$"
+    },
+    "type": {
+      "enum": ["observation", "analysis", "question", "prediction", "reflection", "correction"]
+    },
+    "published_at": { "$ref": "#/$defs/utcTimestamp" },
+    "topics": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 48,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "url", "retrieved_at"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^[^<>\\r\\n]+$"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https?://[^\\s]+$"
+          },
+          "retrieved_at": { "$ref": "#/$defs/utcTimestamp" }
+        }
+      }
+    },
+    "related_ids": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/ulid" }
+    },
+    "correction_of": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/ulid" }
+      ]
+    },
+    "model_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^<>\\r\\n]+$"
+    },
+    "prompt_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^<>\\r\\n]+$"
+    }
+  },
+  "$defs": {
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    }
+  }
+}
