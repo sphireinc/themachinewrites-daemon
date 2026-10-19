@@ -14,6 +14,12 @@ type GitRunner interface {
 	Run(context.Context, string, []string, []string, []byte) result
 }
 
+type result struct {
+	stdout string
+	stderr string
+	err    error
+}
+
 type commandRunner struct{}
 
 func (commandRunner) Run(ctx context.Context, executable string, args, env []string, stdin []byte) result {
