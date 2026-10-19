@@ -64,3 +64,18 @@ func TestNewUsesJSONAndConstrainsMessage(t *testing.T) {
 		t.Fatalf("event = %#v, want health", record["event"])
 	}
 }
+
+func TestRetainedLogWriterIsBoundedAndStillRedacted(t *testing.T) {
+	var buffer bytes.Buffer
+	logger := NewWithRetention(&buffer, 300)
+	const canary = "retention-secret-canary"
+	for range 20 {
+		logger.Error("failure", "event", "cycle_failed", "url", "https://user:pass@example.org/feed", "error", "authorization="+canary)
+	}
+	if len(buffer.String()) > 300 {
+		t.Fatalf("retained log length = %d", len(buffer.String()))
+	}
+	if strings.Contains(buffer.String(), canary) || strings.Contains(buffer.String(), "user:pass") {
+		t.Fatalf("retained log leaked sensitive values: %q", buffer.String())
+	}
+}

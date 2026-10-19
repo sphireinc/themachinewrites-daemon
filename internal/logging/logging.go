@@ -15,6 +15,8 @@ type levelFilteringHandler struct {
 	next slog.Handler
 }
 
+func (levelFilteringHandler) isSafeHandler() {}
+
 func (h levelFilteringHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.next.Enabled(ctx, level)
 }
@@ -43,6 +45,39 @@ func (h levelFilteringHandler) WithGroup(name string) slog.Handler {
 func New(output io.Writer) *slog.Logger {
 	handler := slog.NewJSONHandler(output, &slog.HandlerOptions{Level: slog.LevelInfo})
 	return slog.New(levelFilteringHandler{next: handler})
+}
+
+func NewWithRetention(output io.Writer, maxBytes int64) *slog.Logger {
+	return New(&boundedWriter{writer: output, maxBytes: maxBytes})
+}
+
+type boundedWriter struct {
+	writer   io.Writer
+	maxBytes int64
+	written  int64
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	remaining := w.maxBytes - w.written
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := w.writer.Write(p)
+	w.written += int64(n)
+	return n, err
+}
+
+func FromLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return logger
+	}
+	if _, safe := logger.Handler().(interface{ isSafeHandler() }); safe {
+		return logger
+	}
+	return slog.New(levelFilteringHandler{next: logger.Handler()})
 }
 
 func sanitize(attr slog.Attr) slog.Attr {
