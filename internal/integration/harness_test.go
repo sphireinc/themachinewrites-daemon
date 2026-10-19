@@ -28,10 +28,20 @@ type harnessTopology struct {
 	RemoteHead   string `json:"remote_head"`
 }
 
+func TestBundledHarnessFixtureExists(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "..", "tests", "harness.py")); err != nil {
+		t.Fatalf("bundled integration harness is unavailable: %v", err)
+	}
+}
+
 func createHarness(t *testing.T) harnessTopology {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "topology")
-	command := exec.Command("python3", filepath.Join("..", "..", "..", "_plan", "tests", "harness.py"), "--root", root)
+	harness := filepath.Join("..", "..", "..", "_plan", "tests", "harness.py")
+	if _, err := os.Stat(harness); err != nil {
+		harness = filepath.Join("..", "..", "tests", "harness.py")
+	}
+	command := exec.Command("python3", harness, "--root", root)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("create integration harness: %v: %s", err, output)
