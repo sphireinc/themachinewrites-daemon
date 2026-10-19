@@ -14,11 +14,6 @@ type fakeGitRunner struct {
 	calls   [][]string
 }
 
-type result struct {
-	stdout, stderr string
-	err            error
-}
-
 func (f *fakeGitRunner) Run(_ context.Context, _ string, args, _ []string, _ []byte) result {
 	f.calls = append(f.calls, append([]string(nil), args...))
 	return f.results[strings.Join(args, " ")]
