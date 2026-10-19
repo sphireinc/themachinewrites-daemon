@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,19 +107,40 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if len(candidates) == 0 {
 		return nil
 	}
-	fingerprints := make([]string, 0, len(candidates))
+	at := r.now().UTC().Truncate(time.Millisecond)
+	reservations := make([]store.CandidateReservation, 0, len(candidates))
 	for _, candidate := range candidates {
-		fingerprints = append(fingerprints, candidate.Fingerprint)
+		postID := candidate.DecisionPostID
+		publicationAt := at
+		if candidate.PublicationAt != "" {
+			publicationAt, err = time.Parse(time.RFC3339Nano, candidate.PublicationAt)
+			if err != nil {
+				return err
+			}
+		}
+		if postID == "" {
+			postID, err = publication.GenerateID(candidate.Fingerprint, publicationAt)
+			if err != nil {
+				return err
+			}
+		}
+		reservations = append(reservations, store.CandidateReservation{Fingerprint: candidate.Fingerprint, PostID: postID, At: publicationAt})
 	}
-	if err := r.Store.MarkCandidatesEvaluating(ctx, fingerprints, r.now()); err != nil {
+	fingerprints := make([]string, 0, len(reservations))
+	for _, reservation := range reservations {
+		fingerprints = append(fingerprints, reservation.Fingerprint)
+	}
+	if err := r.Store.ReserveCandidates(ctx, reservations); err != nil {
 		return err
 	}
 	items, err := toObservationCandidates(candidates)
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	record, bundle, err := observations.BuildBundle(items, observations.BundleLimits{MaxItems: len(items), MaxBytes: 128 * 1024})
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	topics := make([]string, 0)
@@ -128,11 +151,13 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	retrieved, err := memory.Retrieve(ctx, r.Store, memory.RetrievalOptions{Topics: topics, MaxItems: r.memoryItems(), MaxBytes: 16 * 1024})
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	record.Memory = retrieved.JSON
 	corpus, err := publication.LoadCorpus(r.PublicRoot)
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	if revisit := publication.BuildRevisitCandidates(corpus.Posts, r.now(), 30*24*time.Hour); len(revisit) > 0 {
@@ -140,10 +165,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	bundle, err = json.Marshal(record)
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	promptBundle, err := prompts.Load()
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	started := time.Now()
@@ -160,6 +187,7 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 			outputTokens = 4000
 		}
 		if err := r.Budget.Reserve(r.now(), inputTokens, outputTokens); err != nil {
+			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
 			return err
 		}
 	}
@@ -185,28 +213,37 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		return nil
 	}
 	if r.Publisher == nil || r.Outbox == nil || strings.TrimSpace(r.PublicRoot) == "" {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return errors.New("daemon publication dependencies are incomplete")
 	}
-	at := r.now().UTC().Truncate(time.Millisecond)
-	postID, err := publication.GenerateID(candidates[0].Fingerprint, at)
-	if err != nil {
-		return err
-	}
+	postID := reservations[0].PostID
+	at = reservations[0].At
 	rendered, err := publication.Render(*decision.ContentCandidate, publication.RenderInput{
-		ID: postID, PublishedAt: at, ModelIdentifier: r.ModelName, PromptVersion: promptBundle.Version,
+		ID: postID, PublishedAt: at, CorrectionOf: decision.ContentCandidate.CorrectionOf,
+		ModelIdentifier: r.ModelName, PromptVersion: promptBundle.Version,
 	})
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
+	if decision.ContentCandidate.CorrectionOf != "" {
+		if err := publication.ValidateCorrectionDraft(corpus.Posts, postID, at, decision.ContentCandidate.CorrectionOf); err != nil {
+			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+			return err
+		}
+	}
 	if err := publication.WriteRenderedPost(r.PublicRoot, rendered); err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	pending, err := publication.LoadCorpus(r.PublicRoot)
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	feedPaths, err := publication.MaterializeFeeds(r.PublicRoot, pending.Posts, at)
 	if err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
 	paths := []string{rendered.Path}
@@ -224,6 +261,30 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if err := r.Store.SetCandidateDecision(ctx, fingerprints, "published", r.now()); err != nil {
 		return err
 	}
+	evidenceLinks := make([]string, 0, len(decision.ContentCandidate.Sources))
+	for _, source := range decision.ContentCandidate.Sources {
+		evidenceLinks = append(evidenceLinks, source.URL)
+	}
+	relatedIDs := append([]string(nil), decision.ContentCandidate.RelatedIDs...)
+	if decision.ContentCandidate.CorrectionOf != "" {
+		relatedIDs = append(relatedIDs, decision.ContentCandidate.CorrectionOf)
+	}
+	kind := memory.KindObservation
+	switch decision.ContentCandidate.Type {
+	case "prediction":
+		kind = memory.KindPrediction
+	case "question":
+		kind = memory.KindOpenQuestion
+	case "correction":
+		kind = memory.KindCorrection
+	}
+	if err := memory.Write(ctx, r.Store, memory.Memory{
+		ID: "post-" + postID, Kind: kind, Summary: decision.ContentCandidate.Title,
+		EvidenceLinks: evidenceLinks, RelatedPostIDs: relatedIDs, UpdatedAt: at,
+		SourceHash: fingerprintHash(r.ModelName, postID), CommitSHA: result.CommitSHA,
+	}); err != nil {
+		return fmt.Errorf("write confirmed publication memory: %w", err)
+	}
 	if r.Metrics != nil {
 		r.Metrics.Published()
 	}
@@ -231,6 +292,11 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		r.Emitter.Emit(ctx, telemetry.EventPushConfirmed, postID, 0, "commit_sha", result.CommitSHA)
 	}
 	return nil
+}
+
+func fingerprintHash(modelName, postID string) string {
+	digest := sha256.Sum256([]byte(modelName + "\n" + postID))
+	return hex.EncodeToString(digest[:])
 }
 
 func (r Runtime) memoryItems() int {

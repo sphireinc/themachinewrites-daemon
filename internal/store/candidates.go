@@ -20,6 +20,8 @@ type Candidate struct {
 	DiscoveredAt     string
 	Fingerprint      string
 	LastSeenAt       string
+	DecisionPostID   string
+	PublicationAt    string
 }
 
 func (s *Store) UpsertCandidate(ctx context.Context, candidate Candidate) (bool, error) {
@@ -63,9 +65,10 @@ func (s *Store) PendingCandidates(ctx context.Context, limit int) ([]Candidate, 
 	}
 	rows, err := s.db.QueryContext(ctx, `
         SELECT url_canonical_hash, url, source_id, source_name, category, headline,
-               published_at, excerpt, discovered_at, fingerprint, last_seen_at
+               published_at, excerpt, discovered_at, fingerprint, last_seen_at,
+               COALESCE(decision_post_id, ''), COALESCE(decision_publication_time, '')
         FROM observed_items
-        WHERE url <> '' AND headline <> '' AND decision_state = 'pending'
+        WHERE url <> '' AND headline <> '' AND decision_state IN ('pending', 'evaluating')
         ORDER BY published_at DESC, fingerprint ASC
         LIMIT ?`, limit)
 	if err != nil {
@@ -77,7 +80,8 @@ func (s *Store) PendingCandidates(ctx context.Context, limit int) ([]Candidate, 
 		var candidate Candidate
 		if err := rows.Scan(&candidate.URLCanonicalHash, &candidate.URL, &candidate.SourceID, &candidate.SourceName,
 			&candidate.Category, &candidate.Headline, &candidate.PublishedAt, &candidate.Excerpt,
-			&candidate.DiscoveredAt, &candidate.Fingerprint, &candidate.LastSeenAt); err != nil {
+			&candidate.DiscoveredAt, &candidate.Fingerprint, &candidate.LastSeenAt,
+			&candidate.DecisionPostID, &candidate.PublicationAt); err != nil {
 			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		candidates = append(candidates, candidate)
@@ -88,20 +92,33 @@ func (s *Store) PendingCandidates(ctx context.Context, limit int) ([]Candidate, 
 	return candidates, nil
 }
 
-func (s *Store) MarkCandidatesEvaluating(ctx context.Context, fingerprints []string, at time.Time) error {
-	if len(fingerprints) == 0 || len(fingerprints) > 100 {
-		return errors.New("candidate fingerprint count must be 1–100")
+type CandidateReservation struct {
+	Fingerprint string
+	PostID      string
+	At          time.Time
+}
+
+func (s *Store) ReserveCandidates(ctx context.Context, reservations []CandidateReservation) error {
+	if len(reservations) == 0 || len(reservations) > 100 {
+		return errors.New("candidate reservation count must be 1–100")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin candidate decision: %w", err)
 	}
 	defer tx.Rollback()
-	for _, fingerprint := range fingerprints {
-		if strings.TrimSpace(fingerprint) == "" {
+	for _, reservation := range reservations {
+		if strings.TrimSpace(reservation.Fingerprint) == "" || strings.TrimSpace(reservation.PostID) == "" || reservation.At.IsZero() {
 			return errors.New("candidate fingerprint is required")
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE observed_items SET decision_state = 'evaluating', decision_updated_at = ? WHERE fingerprint = ? AND decision_state = 'pending'`, at.UTC().Format(time.RFC3339Nano), fingerprint)
+		result, err := tx.ExecContext(ctx, `
+            UPDATE observed_items
+            SET decision_state = 'evaluating', decision_updated_at = ?,
+                decision_post_id = COALESCE(decision_post_id, ?),
+                decision_publication_time = COALESCE(decision_publication_time, ?)
+            WHERE fingerprint = ? AND decision_state IN ('pending', 'evaluating')`,
+			reservation.At.UTC().Format(time.RFC3339Nano), reservation.PostID,
+			reservation.At.UTC().Format(time.RFC3339Nano), reservation.Fingerprint)
 		if err != nil {
 			return fmt.Errorf("mark candidate evaluating: %w", err)
 		}
@@ -111,6 +128,17 @@ func (s *Store) MarkCandidatesEvaluating(ctx context.Context, fingerprints []str
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Store) RequeueInterruptedCandidates(ctx context.Context, at time.Time) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+        UPDATE observed_items
+        SET decision_state = 'pending', decision_updated_at = ?
+        WHERE decision_state = 'evaluating'`, at.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("requeue interrupted candidates: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) SetCandidateDecision(ctx context.Context, fingerprints []string, state string, at time.Time) error {

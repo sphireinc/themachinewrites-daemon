@@ -93,6 +93,25 @@ func validateProposal(proposal Proposal) error {
 		if strings.TrimSpace(proposal.ConfidenceRationale) == "" {
 			return errors.New("publish proposal requires confidence rationale")
 		}
+		if proposal.CorrectionOf != "" {
+			if proposal.Type != "correction" || !validCorrectionID(proposal.CorrectionOf) {
+				return errors.New("correction_of requires a correction type and valid ULID")
+			}
+		} else if proposal.Type == "correction" {
+			return errors.New("correction publication requires correction_of")
+		}
 	}
 	return nil
+}
+
+func validCorrectionID(id string) bool {
+	if len(id) != 26 || id[0] < '0' || id[0] > '7' {
+		return false
+	}
+	for _, character := range id {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", character) {
+			return false
+		}
+	}
+	return true
 }

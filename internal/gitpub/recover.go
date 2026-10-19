@@ -16,7 +16,7 @@ func (r *Repository) RecoverPost(ctx context.Context, postID string) (string, er
 	if len(postID) != 26 || strings.ContainsAny(postID, "\r\n/") {
 		return "", errors.New("invalid post ID")
 	}
-	out, err := r.run(ctx, "log", "--all", "--format=%H", "--", "posts")
+	out, err := r.run(ctx, "log", "--format=%H", r.Remote+"/"+r.Branch, "--", "posts")
 	if err != nil {
 		return "", err
 	}

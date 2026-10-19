@@ -30,6 +30,7 @@ type Proposal struct {
 	Topics              []string `json:"topics,omitempty"`
 	RelatedIDs          []string `json:"related_ids,omitempty"`
 	RequestedIDs        []string `json:"requested_ids,omitempty"`
+	CorrectionOf        string   `json:"correction_of,omitempty"`
 	ConfidenceRationale string   `json:"confidence_rationale,omitempty"`
 }
 
