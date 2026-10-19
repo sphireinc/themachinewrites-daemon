@@ -75,7 +75,11 @@ func Render(proposal engine.Proposal, input RenderInput) (RenderedPost, error) {
 	}
 	fmt.Fprintf(&builder, "model_identifier: %s\nprompt_version: %s\n---\n\n%s\n",
 		yamlScalar(input.ModelIdentifier), yamlScalar(input.PromptVersion), strings.TrimSpace(proposal.Body))
-	return RenderedPost{ID: input.ID, Path: path, Markdown: []byte(builder.String())}, nil
+	markdown := []byte(builder.String())
+	if err := ScanRenderedPost(markdown); err != nil {
+		return RenderedPost{}, err
+	}
+	return RenderedPost{ID: input.ID, Path: path, Markdown: markdown}, nil
 }
 
 func yamlList(values []string) string {
