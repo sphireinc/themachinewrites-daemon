@@ -39,6 +39,13 @@ func WriteRenderedPost(root string, post RenderedPost) error {
 	}
 	file, err := os.OpenFile(absolute, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, readErr := os.ReadFile(absolute)
+			if readErr == nil && string(existing) == string(post.Markdown) {
+				return nil
+			}
+			return errors.New("rendered post destination already contains different content")
+		}
 		return fmt.Errorf("create rendered post: %w", err)
 	}
 	if _, err := file.Write(post.Markdown); err != nil {

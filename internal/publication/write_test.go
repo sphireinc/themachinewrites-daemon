@@ -23,8 +23,13 @@ func TestWriteRenderedPostCreatesOnlyCanonicalFile(t *testing.T) {
 	if err != nil || string(content) != string(post.Markdown) {
 		t.Fatalf("written content = %q, %v", content, err)
 	}
-	if err := WriteRenderedPost(root, post); err == nil {
-		t.Fatal("duplicate write accepted")
+	if err := WriteRenderedPost(root, post); err != nil {
+		t.Fatalf("idempotent retry rejected: %v", err)
+	}
+	changed := post
+	changed.Markdown = append(append([]byte(nil), post.Markdown...), []byte("changed")...)
+	if err := WriteRenderedPost(root, changed); err == nil {
+		t.Fatal("conflicting duplicate write accepted")
 	}
 	for _, unsafe := range []string{"../outside.md", "/tmp/outside.md", `posts\escape.md`} {
 		copy := post

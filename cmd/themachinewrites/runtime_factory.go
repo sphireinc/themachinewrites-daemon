@@ -42,12 +42,18 @@ func buildSupervisorCycleWith(
 		return supervisor.Cycle{}, func() error { return nil }, err
 	}
 	fetcher := sources.NewFetcher(sources.NewURLValidator(nil, false))
+	codexSandbox, err := os.MkdirTemp(cfg.RuntimeDir, "codex-sandbox-")
+	if err != nil {
+		closeRuntime()
+		return supervisor.Cycle{}, func() error { return nil }, err
+	}
 	codexEngine, err := engine.NewBoundedCodexEngine(engine.FactoryConfig{
 		Executable: cfg.CodexExecutable, Model: cfg.CodexModel, Timeout: cfg.CodexTimeout,
-		SandboxRoot: filepath.Join(cfg.RuntimeDir, "codex-sandbox"), CodexHome: cfg.CodexHome,
+		SandboxRoot: codexSandbox, CodexHome: cfg.CodexHome,
 		DeniedReadPaths: codexDeniedReadPaths(cfg),
 	})
 	if err != nil {
+		os.RemoveAll(codexSandbox)
 		closeRuntime()
 		return supervisor.Cycle{}, func() error { return nil }, err
 	}
@@ -81,7 +87,11 @@ func buildSupervisorCycleWith(
 		cycleRuntime.Outbox = runtime
 	}
 	cycle := supervisor.Cycle{DryRun: cfg.DryRun, Poll: cycleRuntime.Poll, Decide: cycleRuntime.DecideAndPublish}
-	return cycle, closeRuntime, nil
+	return cycle, func() error {
+		removeErr := os.RemoveAll(codexSandbox)
+		closeErr := closeRuntime()
+		return errors.Join(removeErr, closeErr)
+	}, nil
 }
 
 func codexDeniedReadPaths(cfg config.Config) []string {
