@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,5 +43,24 @@ func TestTruncatedSnapshotFailsClosed(t *testing.T) {
 	}
 	if _, err := ReadHealth(path); err == nil {
 		t.Fatal("truncated JSON accepted")
+	}
+}
+
+func TestHealthRejectsUnsafeLabelsAndOversizedSnapshot(t *testing.T) {
+	for _, health := range []Health{
+		{PausedReason: "budget\npaused_reason: injected"},
+		{LastErrorKind: strings.Repeat("x", 65)},
+	} {
+		path := filepath.Join(t.TempDir(), "health.json")
+		if err := WriteHealth(path, health); err == nil {
+			t.Fatalf("invalid health accepted: %#v", health)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "health.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxHealthSnapshotBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHealth(path); err == nil || !strings.Contains(err.Error(), "size limit") {
+		t.Fatalf("oversized snapshot error = %v", err)
 	}
 }

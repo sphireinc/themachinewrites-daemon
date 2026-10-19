@@ -62,12 +62,13 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	if remaining <= 0 {
 		return len(p), nil
 	}
+	logical := len(p)
 	if int64(len(p)) > remaining {
 		p = p[:remaining]
 	}
 	n, err := w.writer.Write(p)
 	w.written += int64(n)
-	return n, err
+	return logical, err
 }
 
 func FromLogger(logger *slog.Logger) *slog.Logger {
