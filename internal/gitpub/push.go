@@ -13,6 +13,16 @@ func (r *Repository) PushFastForward(ctx context.Context, maxAttempts int) (stri
 	}
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if _, err := r.run(ctx, "fetch", r.Remote); err != nil {
+			lastErr = err
+			continue
+		}
+		if _, err := r.run(ctx, "rev-parse", "--verify", r.Remote+"/"+r.Branch); err == nil {
+			if _, err := r.run(ctx, "rebase", r.Remote+"/"+r.Branch); err != nil {
+				_, _ = r.run(ctx, "rebase", "--abort")
+				return "", err
+			}
+		}
 		head, err := r.run(ctx, "rev-parse", "HEAD")
 		if err != nil {
 			return "", err
