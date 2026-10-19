@@ -14,6 +14,7 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
 
 const usage = `Usage: themachinewrites <command>
@@ -22,6 +23,7 @@ Commands:
   run              run the supervisor until canceled
   once             execute one bounded cycle
   validate-config  validate daemon configuration
+  status           print local daemon health snapshot
 `
 
 func main() {
@@ -39,10 +41,56 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidateConfig(args[1:], stdout, stderr)
 	case "run", "once":
 		return runSupervisor(args[0], args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	path, ok := snapshotPath(args)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: themachinewrites status [--snapshot PATH]")
+		return 2
+	}
+	health, err := telemetry.ReadHealth(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "unable to read health snapshot: %s\n", logging.RedactSecrets(err.Error()))
+		return 1
+	}
+	fmt.Fprintf(stdout, "status: schema=%d\n", health.SchemaVersion)
+	fmt.Fprintf(stdout, "last_poll: %s\n", displayTime(health.LastPoll))
+	fmt.Fprintf(stdout, "last_model_call: %s\n", displayTime(health.LastModelCall))
+	fmt.Fprintf(stdout, "last_confirmed_push: %s\n", displayTime(health.LastConfirmedPush))
+	fmt.Fprintf(stdout, "last_error_kind: %s\n", valueOrNone(health.LastErrorKind))
+	fmt.Fprintf(stdout, "paused_reason: %s\n", valueOrNone(health.PausedReason))
+	return 0
+}
+
+func snapshotPath(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "runtime/health.json", true
+	}
+	if len(args) == 2 && args[0] == "--snapshot" && args[1] != "" {
+		return args[1], true
+	}
+	return "", false
+}
+
+func displayTime(value *time.Time) string {
+	if value == nil {
+		return "never"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func valueOrNone(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return value
 }
 
 func runSupervisor(command string, args []string, stdout, stderr io.Writer) int {
