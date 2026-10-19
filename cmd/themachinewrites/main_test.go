@@ -9,17 +9,22 @@ import (
 )
 
 func TestRunDispatchesSupportedCommands(t *testing.T) {
-	for _, command := range []string{"run", "once"} {
-		t.Run(command, func(t *testing.T) {
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
-			if code := run([]string{command}, &stdout, &stderr); code != 0 {
-				t.Fatalf("run(%q) exit code = %d, stderr = %q", command, code, stderr.String())
-			}
-			if !strings.Contains(stdout.String(), command+" command not implemented") {
-				t.Fatalf("stdout = %q, want command placeholder", stdout.String())
-			}
-		})
+	directory := t.TempDir()
+	sourcesPath := filepath.Join(directory, "sources.yaml")
+	if err := os.WriteFile(sourcesPath, []byte("sources:\n  - {id: fixture, url: https://example.org/feed, enabled: true, request_interval: 15m, name: Fixture}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "daemon.yaml")
+	content := "dry_run: true\nsources_path: " + sourcesPath + "\nruntime_dir: runtime\npublic_repo_path: public\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"once", "--config", configPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("once exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "once complete") {
+		t.Fatalf("stdout=%q", stdout.String())
 	}
 }
 
