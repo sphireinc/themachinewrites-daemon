@@ -182,7 +182,7 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 		Action: engine.ActionPublish, Reason: "fixture", Title: "A mature prediction", Type: "prediction", Body: "A prediction to revisit.",
 		Sources: []engine.Source{{Title: "Fixture", URL: "https://example.org/prediction", RetrievedAt: now.Add(-40 * 24 * time.Hour).Format(time.RFC3339)}},
 		Topics:  []string{"technology"}, RelatedIDs: []string{}, ConfidenceRationale: "fixture",
-	}, publication.RenderInput{ID: postID, PublishedAt: postedAt, ModelIdentifier: "fixture", PromptVersion: "p1"})
+	}, publication.RenderInput{ID: postID, PublishedAt: postedAt, ModelIdentifier: "fixture", PromptVersion: "p1", IndependentSources: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 	if err := daemon.DecideAndPublish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "correction linked") {
+	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "active_dispute") || !strings.Contains(capture.input.Bundle, "correction linked") {
 		t.Fatalf("bundle omitted matured prediction context: %s", capture.input.Bundle)
 	}
 }

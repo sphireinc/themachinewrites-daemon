@@ -42,7 +42,7 @@ func TestPushSuccessThenAckCrashRecoversWithoutDuplicateCommit(t *testing.T) {
 		Sources: []engine.Source{{Title: "Fixture source", URL: "https://example.org/recovery", RetrievedAt: at.Add(-time.Minute).Format(time.RFC3339Nano)}},
 		Topics:  []string{"technology"}, RelatedIDs: []string{}, ConfidenceRationale: "The fixture supplies a complete source.",
 	}
-	rendered, err := publication.Render(proposal, publication.RenderInput{ID: id, PublishedAt: at, ModelIdentifier: "fixture", PromptVersion: "p1"})
+	rendered, err := publication.Render(proposal, publication.RenderInput{ID: id, PublishedAt: at, ModelIdentifier: "fixture", PromptVersion: "p1", IndependentSources: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

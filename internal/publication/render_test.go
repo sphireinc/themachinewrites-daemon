@@ -15,7 +15,7 @@ func TestRenderCanonicalPostGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	post, err := Render(proposal, RenderInput{
-		ID: id, PublishedAt: at, ModelIdentifier: "test-model", PromptVersion: "sha256:prompt",
+		ID: id, PublishedAt: at, ModelIdentifier: "test-model", PromptVersion: "sha256:prompt", IndependentSources: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestRenderRejectsInvalidProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Render(validProposal(), RenderInput{ID: id, PublishedAt: at, ModelIdentifier: "", PromptVersion: "sha256:prompt"})
+	_, err = Render(validProposal(), RenderInput{ID: id, PublishedAt: at, ModelIdentifier: "", PromptVersion: "sha256:prompt", IndependentSources: 1})
 	if err == nil || !strings.Contains(err.Error(), "model identifier") {
 		t.Fatalf("Render() error = %v", err)
 	}

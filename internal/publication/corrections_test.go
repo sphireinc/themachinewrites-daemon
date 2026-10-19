@@ -43,11 +43,11 @@ func TestCorrectionWorkflowKeepsOriginalBytesAndBuildsBacklinks(t *testing.T) {
 	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
 	targetID, _ := GenerateID("original", at)
 	correctionID, _ := GenerateID("correction", at.Add(time.Hour))
-	original, _ := Render(validProposal(), RenderInput{ID: targetID, PublishedAt: at, ModelIdentifier: "test", PromptVersion: "p1"})
+	original, _ := Render(validProposal(), RenderInput{ID: targetID, PublishedAt: at, ModelIdentifier: "test", PromptVersion: "p1", IndependentSources: 1})
 	correctionProposal := validProposal()
 	correctionProposal.Type = "correction"
 	correctionProposal.Title = "A correction to the earlier view"
-	correction, _ := Render(correctionProposal, RenderInput{ID: correctionID, PublishedAt: at.Add(time.Hour), CorrectionOf: targetID, ModelIdentifier: "test", PromptVersion: "p1"})
+	correction, _ := Render(correctionProposal, RenderInput{ID: correctionID, PublishedAt: at.Add(time.Hour), CorrectionOf: targetID, ModelIdentifier: "test", PromptVersion: "p1", IndependentSources: 1})
 	for _, post := range []RenderedPost{original, correction} {
 		path := filepath.Join(root, filepath.FromSlash(post.Path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/prompts"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/research"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
@@ -160,8 +162,10 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
 	}
-	if revisit := publication.BuildRevisitCandidates(corpus.Posts, r.now(), 30*24*time.Hour); len(revisit) > 0 {
-		record.RevisitPrompt = publication.RevisitPrompt(revisit)
+	revisitQueue := buildRevisitQueue(corpus.Posts, items, r.now())
+	if len(revisitQueue) > 0 {
+		payload, _ := json.Marshal(revisitQueue)
+		record.RevisitPrompt = "Review these scheduled revisit opportunities and choose investigate, defer, publish a follow-up analysis/reflection, or publish a correction linked to the original: " + string(payload)
 	}
 	bundle, err = json.Marshal(record)
 	if err != nil {
@@ -221,6 +225,7 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	rendered, err := publication.Render(*decision.ContentCandidate, publication.RenderInput{
 		ID: postID, PublishedAt: at, CorrectionOf: decision.ContentCandidate.CorrectionOf,
 		ModelIdentifier: r.ModelName, PromptVersion: promptBundle.Version,
+		IndependentSources: independentSourceCount(items),
 	})
 	if err != nil {
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
@@ -292,6 +297,32 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		r.Emitter.Emit(ctx, telemetry.EventPushConfirmed, postID, 0, "commit_sha", result.CommitSHA)
 	}
 	return nil
+}
+
+func buildRevisitQueue(posts []publication.PostRecord, items []observations.Candidate, now time.Time) []memory.RevisitSuggestion {
+	inputs := make([]memory.RevisitInput, 0, len(posts))
+	sourceText := make([]research.Evidence, 0, len(items))
+	for _, item := range items {
+		sourceText = append(sourceText, research.Evidence{SourceID: item.SourceID, Text: item.Headline + " " + item.Excerpt})
+	}
+	disputed := research.IndependentEvidenceCount(sourceText) < 2
+	for _, post := range posts {
+		if post.Type == "prediction" {
+			inputs = append(inputs, memory.RevisitInput{PostID: post.ID, Title: post.Title, PredictionAt: post.PublishedAt, DueAt: post.PublishedAt.Add(30 * 24 * time.Hour), Disputed: disputed})
+		}
+	}
+	return memory.BuildRevisitQueue(inputs, now)
+}
+
+func independentSourceCount(items []observations.Candidate) int {
+	hosts := map[string]bool{}
+	for _, item := range items {
+		parsed, err := url.Parse(item.URL)
+		if err == nil && parsed.Hostname() != "" {
+			hosts[strings.ToLower(parsed.Hostname())] = true
+		}
+	}
+	return len(hosts)
 }
 
 func fingerprintHash(modelName, postID string) string {

@@ -24,7 +24,7 @@ func TestLoadCorpusReadsCanonicalPostsAndSortsDeterministically(t *testing.T) {
 		}
 		post, err := Render(proposal, RenderInput{
 			ID: id, PublishedAt: at.Add(time.Duration(index) * time.Minute),
-			ModelIdentifier: "test-model", PromptVersion: "sha256:prompt",
+			ModelIdentifier: "test-model", PromptVersion: "sha256:prompt", IndependentSources: 1,
 		})
 		if err != nil {
 			t.Fatal(err)
