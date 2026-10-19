@@ -2,10 +2,13 @@ package gitpub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
 )
 
 func VerifyChangedFiles(_ context.Context, root string, paths []string) error {
@@ -31,6 +34,22 @@ func VerifyChangedFiles(_ context.Context, root string, paths []string) error {
 				return errors.New("empty or unreadable publication artifact")
 			}
 		}
+		if strings.HasPrefix(path, "posts/") {
+			if _, err := publication.LoadCorpus(root); err != nil {
+				return fmt.Errorf("verify post contract: %w", err)
+			}
+		}
+		if strings.HasPrefix(path, "feed/") {
+			var decoded map[string]any
+			if err := json.Unmarshal(contentForVerify(absolute), &decoded); err != nil {
+				return fmt.Errorf("verify feed JSON %s: %w", path, err)
+			}
+			if decoded["schema_version"] != float64(1) {
+				return fmt.Errorf("unsupported feed schema in %s", path)
+			}
+		}
 	}
 	return nil
 }
+
+func contentForVerify(path string) []byte { content, _ := os.ReadFile(path); return content }
