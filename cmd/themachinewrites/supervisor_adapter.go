@@ -11,18 +11,31 @@ import (
 type loopAdapter struct {
 	cycle    supervisor.Cycle
 	interval time.Duration
+	backoff  *supervisor.Backoff
+	after    func(time.Duration) <-chan time.Time
 }
 
 func (a loopAdapter) Once(ctx context.Context) error { return a.cycle.Once(ctx) }
 func (a loopAdapter) Run(ctx context.Context) error {
+	after := a.after
+	if after == nil {
+		after = time.After
+	}
 	for {
-		if err := a.cycle.Once(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			return err
+		err := a.cycle.Once(ctx)
+		wait := a.interval
+		if err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return ctx.Err()
+			}
+			wait = a.backoff.Next()
+		} else if a.backoff != nil {
+			a.backoff.Reset()
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(a.interval):
+		case <-after(wait):
 		}
 	}
 }
