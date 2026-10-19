@@ -39,6 +39,12 @@
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" }
     },
+    "requested_ids": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" }
+    },
     "confidence_rationale": { "type": "string", "minLength": 1, "maxLength": 2000 }
   },
   "allOf": [

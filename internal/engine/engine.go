@@ -29,6 +29,7 @@ type Proposal struct {
 	Sources             []Source `json:"sources,omitempty"`
 	Topics              []string `json:"topics,omitempty"`
 	RelatedIDs          []string `json:"related_ids,omitempty"`
+	RequestedIDs        []string `json:"requested_ids,omitempty"`
 	ConfidenceRationale string   `json:"confidence_rationale,omitempty"`
 }
 
