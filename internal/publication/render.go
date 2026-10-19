@@ -11,11 +11,12 @@ import (
 )
 
 type RenderInput struct {
-	ID              string
-	PublishedAt     time.Time
-	CorrectionOf    string
-	ModelIdentifier string
-	PromptVersion   string
+	ID                 string
+	PublishedAt        time.Time
+	CorrectionOf       string
+	ModelIdentifier    string
+	PromptVersion      string
+	IndependentSources int
 }
 
 type RenderedPost struct {
@@ -32,6 +33,12 @@ func Render(proposal engine.Proposal, input RenderInput) (RenderedPost, error) {
 		return RenderedPost{}, err
 	}
 	if err := ValidateMarkdown(proposal.Body); err != nil {
+		return RenderedPost{}, err
+	}
+	if input.IndependentSources < 0 {
+		return RenderedPost{}, errors.New("independent source count must be explicit")
+	}
+	if err := ValidateEvidenceQuality(proposal, input.IndependentSources); err != nil {
 		return RenderedPost{}, err
 	}
 	if strings.TrimSpace(input.ModelIdentifier) == "" {

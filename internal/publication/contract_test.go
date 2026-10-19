@@ -21,7 +21,7 @@ func TestRenderedMarkdownMatchesV1Contract(t *testing.T) {
 		t.Fatal(err)
 	}
 	post, err := Render(validProposal(), RenderInput{
-		ID: id, PublishedAt: at, ModelIdentifier: "test-model", PromptVersion: "sha256:prompt",
+		ID: id, PublishedAt: at, ModelIdentifier: "test-model", PromptVersion: "sha256:prompt", IndependentSources: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

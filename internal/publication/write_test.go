@@ -11,7 +11,7 @@ func TestWriteRenderedPostCreatesOnlyCanonicalFile(t *testing.T) {
 	root := t.TempDir()
 	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
 	post, err := Render(validProposal(), RenderInput{
-		ID: "01M589K0G00000000000000000", PublishedAt: at, ModelIdentifier: "test", PromptVersion: "p1",
+		ID: "01M589K0G00000000000000000", PublishedAt: at, ModelIdentifier: "test", PromptVersion: "p1", IndependentSources: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

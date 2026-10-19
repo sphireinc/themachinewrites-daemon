@@ -10,7 +10,7 @@ import (
 
 func TestScanRenderedPostBlocksCredentialCanaries(t *testing.T) {
 	post, err := Render(validProposal(), RenderInput{
-		ID: "01M589K0G00000000000000000", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC), ModelIdentifier: "test-model", PromptVersion: "sha256:test",
+		ID: "01M589K0G00000000000000000", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC), ModelIdentifier: "test-model", PromptVersion: "sha256:test", IndependentSources: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestSecretInBodyPreventsCanonicalRender(t *testing.T) {
 	proposal.Body += "\n\nLeaked key: " + "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
 	_, err := Render(proposal, RenderInput{
 		ID: "01M589K0G00000000000000000", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC),
-		ModelIdentifier: "test-model", PromptVersion: "sha256:test",
+		ModelIdentifier: "test-model", PromptVersion: "sha256:test", IndependentSources: 1,
 	})
 	if err == nil || !strings.Contains(err.Error(), "quarantine") {
 		t.Fatalf("Render() error = %v, want secret-scan rejection", err)

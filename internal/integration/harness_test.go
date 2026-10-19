@@ -93,7 +93,7 @@ func TestRSSFixtureToRemotePostAndWebsiteFeed(t *testing.T) {
 		Topics:  []string{"technology"}, RelatedIDs: []string{}, ConfidenceRationale: "One deterministic fixture source supports the bounded observation.",
 	}
 	rendered, err := publication.Render(proposal, publication.RenderInput{
-		ID: id, PublishedAt: at, ModelIdentifier: "fixture-model", PromptVersion: "fixture-prompt-v1",
+		ID: id, PublishedAt: at, ModelIdentifier: "fixture-model", PromptVersion: "fixture-prompt-v1", IndependentSources: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
