@@ -37,6 +37,26 @@ func TestPushFastForwardOnly(t *testing.T) {
 	}
 }
 
+func TestPushNeverUsesForceAfterRebase(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "public")
+	runner := &fakeGitRunner{results: map[string]result{
+		"-C " + root + " fetch origin":                                 {stdout: ""},
+		"-C " + root + " rev-parse --verify origin/main":               {stdout: "remote\n"},
+		"-C " + root + " rebase origin/main":                           {stdout: "rebase\n"},
+		"-C " + root + " rev-parse HEAD":                               {stdout: "headsha\n"},
+		"-C " + root + " push --porcelain origin HEAD:refs/heads/main": {stdout: "pushed\n"},
+	}}
+	repo := &Repository{Root: root, Branch: "main", Remote: "origin", Runner: runner}
+	sha, err := repo.PushFastForward(context.Background(), 1)
+	if err != nil || sha != "headsha" {
+		t.Fatalf("PushFastForward() = %q, %v", sha, err)
+	}
+	args := strings.Join(runner.calls[len(runner.calls)-1], " ")
+	if strings.Contains(args, "force") {
+		t.Fatalf("push used a force flag: %s", args)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
