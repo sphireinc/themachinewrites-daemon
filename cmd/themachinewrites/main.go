@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
@@ -26,6 +28,7 @@ Commands:
   once             execute one bounded cycle
   validate-config  validate daemon configuration
   status           print local daemon health snapshot
+  backup           create a verified online SQLite backup
 `
 
 func main() {
@@ -49,10 +52,56 @@ func runWithFactory(args []string, stdout, stderr io.Writer, factory supervisorF
 		return runSupervisorWithFactory(args[0], args[1:], stdout, stderr, factory)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runBackup(args []string, stdout, stderr io.Writer) int {
+	configFile, destination, ok := backupArguments(args)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: themachinewrites backup --config PATH --output PATH")
+		return 2
+	}
+	cfg, err := config.LoadEnvy(configFile, os.Getenv)
+	if err != nil {
+		logging.New(stderr).Error("backup configuration failed", "error", err)
+		return 1
+	}
+	runtime, err := store.Open(context.Background(), filepath.Join(cfg.RuntimeDir, "runtime.sqlite"))
+	if err != nil {
+		logging.New(stderr).Error("backup database open failed", "error", err)
+		return 1
+	}
+	defer runtime.Close()
+	if err := runtime.BackupTo(context.Background(), destination); err != nil {
+		logging.New(stderr).Error("backup failed", "error", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "backup complete: %s\n", destination)
+	return 0
+}
+
+func backupArguments(args []string) (string, string, bool) {
+	configFile, destination := "", ""
+	for index := 0; index < len(args); index++ {
+		if index+1 >= len(args) {
+			return "", "", false
+		}
+		switch args[index] {
+		case "--config":
+			configFile = args[index+1]
+		case "--output":
+			destination = args[index+1]
+		default:
+			return "", "", false
+		}
+		index++
+	}
+	return configFile, destination, configFile != "" && destination != ""
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
