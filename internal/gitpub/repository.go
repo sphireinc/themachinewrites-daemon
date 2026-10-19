@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type GitRunner interface {
@@ -91,7 +93,77 @@ func (r *Repository) SafePath(relative string) (string, error) {
 	if strings.HasSuffix(clean, ".env") || strings.Contains(clean, "..") {
 		return "", errors.New("unsafe path")
 	}
-	return filepath.Join(r.Root, filepath.FromSlash(clean)), nil
+	if strings.HasPrefix(clean, "posts/") {
+		if err := validatePostPath(clean); err != nil {
+			return "", err
+		}
+	}
+	root, err := filepath.Abs(r.Root)
+	if err != nil {
+		return "", errors.New("repository root is invalid")
+	}
+	candidate := filepath.Join(root, filepath.FromSlash(clean))
+	relativeToRoot, err := filepath.Rel(root, candidate)
+	if err != nil || relativeToRoot == "." || strings.HasPrefix(relativeToRoot, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes repository")
+	}
+	if err := rejectSymlinkAncestors(root, relativeToRoot); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func validatePostPath(path string) error {
+	parts := strings.Split(path, "/")
+	if len(parts) != 5 || parts[0] != "posts" || len(parts[1]) != 4 || len(parts[2]) != 2 || len(parts[3]) != 2 || len(parts[4]) != 29 || parts[4] != parts[4][:26]+".md" {
+		return errors.New("post path must match posts/YYYY/MM/DD/<ULID>.md")
+	}
+	year, month, day := parts[1], parts[2], parts[3]
+	if year[0] == '0' || month[0] == '0' && month[1] == '0' || day[0] == '0' && day[1] == '0' {
+		return errors.New("post path contains invalid UTC date")
+	}
+	for _, value := range []string{year, month, day} {
+		for _, character := range value {
+			if character < '0' || character > '9' {
+				return errors.New("post path contains invalid UTC date")
+			}
+		}
+	}
+	if parts[4][0] < '0' || parts[4][0] > '7' {
+		return errors.New("post path contains invalid ULID")
+	}
+	for _, character := range parts[4][:26] {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", character) {
+			return errors.New("post path contains invalid ULID")
+		}
+	}
+	if !validPostDate(year, month, day) {
+		return errors.New("post path contains invalid UTC date")
+	}
+	return nil
+}
+
+func validPostDate(year, month, day string) bool {
+	at, err := time.Parse("2006-01-02", year+"-"+month+"-"+day)
+	return err == nil && at.Format("2006-01-02") == year+"-"+month+"-"+day
+}
+
+func rejectSymlinkAncestors(root, relative string) error {
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect publication path: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("publication path contains a symlink")
+		}
+	}
+	return nil
 }
 
 func (r *Repository) run(ctx context.Context, args ...string) (string, error) {
