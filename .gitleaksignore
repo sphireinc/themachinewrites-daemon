@@ -1,0 +1,2 @@
+# Synthetic, nonfunctional AWS-key fixture used by secretscan_test.go.
+e40cfeb6a6d1e66f3b21e44e7fb9256c6e68515f:internal/publication/secretscan_test.go:aws-access-token:24
