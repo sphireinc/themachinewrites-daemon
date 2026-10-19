@@ -25,6 +25,17 @@ the installed Codex read-only sandbox enforces filesystem reads.
 
 Host-level isolation remains an operator requirement. Process environment filtering and
 dedicated directories do not answer an arbitrary absolute-path read by a test child that
-does not use the Codex sandbox. The service must run under a dedicated OS account or container that cannot read
-the operator home, SSH/Git credential stores, other daemon secrets or private sibling
-repositories. Record that boundary during deployment; unit tests alone do not prove it.
+does not use the Codex sandbox.
+
+On macOS, the daemon can wrap the child with `/usr/bin/sandbox-exec` and explicit
+`file-read-data` denial for the operator home, SSH/Git credential paths and private
+sibling repositories. Denied paths are canonicalized before policy construction, and a
+real child canary test proves an excluded file cannot be read. Nesting native sandboxing
+inside an existing restricted harness may return `sandbox_apply: Operation not
+permitted`; that integration test must also run on an unrestricted macOS runner. Linux
+deployment must use an equivalent container or OS sandbox that makes those paths
+unavailable.
+
+The service account or container must still be unable to read the operator home,
+SSH/Git stores, other daemon secrets or private sibling repositories. Record that
+boundary during deployment; process-level unit tests alone do not prove the host boundary.

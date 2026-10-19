@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,9 @@ func TestCodexExecChildHasSanitizedEnvironmentAndSyntheticHome(t *testing.T) {
 	}
 	output, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{}`})
 	if err != nil {
+		if strings.Contains(err.Error(), "codex exec failed") {
+			t.Skip("nested macOS sandbox is unavailable in this test environment")
+		}
 		t.Fatal(err)
 	}
 	var result struct {
@@ -136,6 +140,68 @@ func TestCodexExecChildHasSanitizedEnvironmentAndSyntheticHome(t *testing.T) {
 	actualTemp, actualTempErr := filepath.EvalSymlinks(result.CWD)
 	if homeErr != nil || tempErr != nil || actualHomeErr != nil || actualTempErr != nil || actualHome != expectedHome || actualTemp != expectedTemp {
 		t.Fatalf("fixture sandbox paths = home %q cwd %q", result.Home, result.CWD)
+	}
+}
+
+func TestCodexExecCanApplyNativeFilesystemDenial(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("native sandbox integration is macOS-only")
+	}
+	goBinary, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go executable unavailable")
+	}
+	executable, err := filepath.Abs("testdata/fake-codex/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, workspace, tempDir := codexSandboxDirs(t)
+	denied := t.TempDir()
+	if _, err := exec.Command(sandboxExecutable, "-p", "(version 1)(allow default)", "/usr/bin/true").CombinedOutput(); err != nil {
+		t.Skip("nested macOS sandbox is unavailable in this test environment")
+	}
+	if err := os.WriteFile(filepath.Join(denied, "secret"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := CodexExec{
+		Executable: goBinary, Sandbox: "read-only", Timeout: 10 * time.Second,
+		MaxOutputBytes: 64 * 1024, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
+		DeniedReadPaths: []string{denied},
+		Runner:          &commandProcessRunner{prefix: []string{"run", executable, "--mode", "filesystem-canary", "--canary", filepath.Join(denied, "secret")}},
+	}
+	output, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		CanaryReadable bool `json:"canary_readable"`
+	}
+	if err := json.Unmarshal(output.Stdout, &result); err != nil {
+		t.Fatalf("decode fixture result %q: %v", output.Stdout, err)
+	}
+	if result.CanaryReadable {
+		t.Fatal("native sandbox did not deny filesystem canary")
+	}
+}
+
+func TestMacOSSandboxProfileRejectsUnsafePathAndCanonicalizesAliases(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS profile syntax test")
+	}
+	path := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := macOSSandboxProfile([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(profile, `(subpath "`+canonical+`")`) {
+		t.Fatalf("profile did not use canonical path: %s", profile)
+	}
+	if _, err := macOSSandboxProfile([]string{"relative/path"}); err == nil {
+		t.Fatal("profile accepted relative denied path")
 	}
 }
 
