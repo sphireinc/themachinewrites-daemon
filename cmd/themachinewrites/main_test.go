@@ -62,7 +62,7 @@ func TestRunHelpListsEverySubcommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit code = %d, stderr = %q", code, stderr.String())
 	}
-	for _, command := range []string{"run", "once", "validate-config", "status", "backup", "reconcile-public"} {
+	for _, command := range []string{"run", "once", "validate-config", "status", "backup", "reconcile-public", "divergence"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("help output %q does not mention %q", stdout.String(), command)
 		}

@@ -51,5 +51,18 @@ it is idempotent. It never stages, commits, pushes, or changes the remote; any m
 duplicate ID, or conflicting stored commit SHA fails closed before that acknowledgement is
 changed.
 
+## Report local and remote divergence
+
+Run the read-only comparison on the daemon host:
+
+```sh
+themachinewrites divergence --config /etc/themachinewrites/config.yaml
+```
+
+The report lists pending unpublished candidate fingerprints, local post IDs absent from the
+remote commit, and remote post IDs absent locally. It does not repair either side. Exit code
+`0` means all three lists are empty; exit code `3` means at least one discrepancy was found;
+configuration, database, Git, and malformed-history failures exit `1`.
+
 Retention is operator-configurable and bounded to 1–365 encrypted snapshots. No cloud
 provider is assumed; copy the encrypted files to the operator's chosen secure location.

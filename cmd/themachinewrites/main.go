@@ -14,6 +14,7 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/operations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
@@ -21,6 +22,14 @@ import (
 )
 
 type supervisorFactory func(context.Context, config.Config, sources.Configuration) (supervisor.Cycle, func() error, error)
+
+type repositoryOpener func(context.Context, config.Config) (*gitpub.Repository, error)
+
+func openConfiguredRepository(ctx context.Context, cfg config.Config) (*gitpub.Repository, error) {
+	return gitpub.OpenRepository(ctx, gitpub.RepositoryConfig{
+		Root: cfg.PublicRepoPath, Branch: cfg.PublicBranch, Remote: "origin", ExpectedRemote: cfg.PublicRemote,
+	}, nil)
+}
 
 const usage = `Usage: themachinewrites <command>
 
@@ -31,6 +40,7 @@ Commands:
   status           print local daemon health snapshot
   backup           create a verified online SQLite backup
   reconcile-public rebuild publication acknowledgements from remote Git history
+  divergence       report local versus remote publication discrepancies
 `
 
 func main() {
@@ -57,7 +67,9 @@ func runWithFactory(args []string, stdout, stderr io.Writer, factory supervisorF
 	case "backup":
 		return runBackup(args[1:], stdout, stderr)
 	case "reconcile-public":
-		return runReconcilePublic(args[1:], stdout, stderr)
+		return runReconcilePublicWithOpener(args[1:], stdout, stderr, openConfiguredRepository)
+	case "divergence":
+		return runDivergenceWithOpener(args[1:], stdout, stderr, openConfiguredRepository)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -109,6 +121,10 @@ func backupArguments(args []string) (string, string, bool) {
 }
 
 func runReconcilePublic(args []string, stdout, stderr io.Writer) int {
+	return runReconcilePublicWithOpener(args, stdout, stderr, openConfiguredRepository)
+}
+
+func runReconcilePublicWithOpener(args []string, stdout, stderr io.Writer, opener repositoryOpener) int {
 	configFile, ok := configPath(args)
 	if !ok {
 		fmt.Fprintln(stderr, "usage: themachinewrites reconcile-public [--config PATH]")
@@ -119,9 +135,7 @@ func runReconcilePublic(args []string, stdout, stderr io.Writer) int {
 		logging.New(stderr).Error("reconciliation configuration failed", "error", err)
 		return 1
 	}
-	repository, err := gitpub.OpenRepository(context.Background(), gitpub.RepositoryConfig{
-		Root: cfg.PublicRepoPath, Branch: cfg.PublicBranch, Remote: "origin", ExpectedRemote: cfg.PublicRemote,
-	}, nil)
+	repository, err := opener(context.Background(), cfg)
 	if err != nil {
 		logging.New(stderr).Error("reconciliation repository open failed", "error", err)
 		return 1
@@ -138,6 +152,44 @@ func runReconcilePublic(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "reconciled %d publication(s) at %s\n", len(result.PostIDs), result.CommitSHA)
+	return 0
+}
+
+func runDivergence(args []string, stdout, stderr io.Writer) int {
+	return runDivergenceWithOpener(args, stdout, stderr, openConfiguredRepository)
+}
+
+func runDivergenceWithOpener(args []string, stdout, stderr io.Writer, opener repositoryOpener) int {
+	configFile, ok := configPath(args)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: themachinewrites divergence [--config PATH]")
+		return 2
+	}
+	cfg, err := config.LoadEnvy(configFile, os.Getenv)
+	if err != nil {
+		logging.New(stderr).Error("divergence configuration failed", "error", err)
+		return 1
+	}
+	repository, err := opener(context.Background(), cfg)
+	if err != nil {
+		logging.New(stderr).Error("divergence repository open failed", "error", err)
+		return 1
+	}
+	runtime, err := store.Open(context.Background(), filepath.Join(cfg.RuntimeDir, "runtime.sqlite"))
+	if err != nil {
+		logging.New(stderr).Error("divergence database open failed", "error", err)
+		return 1
+	}
+	defer runtime.Close()
+	report, err := operations.InspectDivergence(context.Background(), runtime, repository)
+	if err != nil {
+		logging.New(stderr).Error("divergence report failed", "error", err)
+		return 1
+	}
+	fmt.Fprint(stdout, report.String())
+	if report.HasWarnings() {
+		return 3
+	}
 	return 0
 }
 
