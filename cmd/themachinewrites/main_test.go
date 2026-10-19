@@ -11,6 +11,7 @@ import (
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
@@ -61,7 +62,7 @@ func TestRunHelpListsEverySubcommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit code = %d, stderr = %q", code, stderr.String())
 	}
-	for _, command := range []string{"run", "once", "validate-config", "status"} {
+	for _, command := range []string{"run", "once", "validate-config", "status", "backup"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("help output %q does not mention %q", stdout.String(), command)
 		}
@@ -82,6 +83,47 @@ func TestStatusPrintsPausedReasonAndLastTimes(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("status output missing %q: %s", want, stdout.String())
 		}
+	}
+}
+
+func TestBackupCommandCreatesVerifiedRestorableFile(t *testing.T) {
+	directory := t.TempDir()
+	codexHome := filepath.Join(directory, "codex-home")
+	runtimeDir := filepath.Join(directory, "runtime")
+	public := filepath.Join(directory, "public")
+	for _, path := range []string{codexHome, runtimeDir, public} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configPath := filepath.Join(directory, "daemon.yaml")
+	content := "dry_run: true\nsources_path: sources.yaml\nruntime_dir: " + runtimeDir + "\ncodex_model: gpt-6\ncodex_home: " + codexHome + "\npublic_repo_path: " + public + "\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := store.Open(context.Background(), filepath.Join(runtimeDir, "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.DB().ExecContext(context.Background(), "INSERT INTO memories(id,kind,summary,updated_at,source_hash) VALUES ('m1','observation','summary','2026-10-18T20:00:00Z','hash')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(directory, "backup.sqlite")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"backup", "--config", configPath, "--output", output}, &stdout, &stderr); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, stderr.String())
+	}
+	restored, err := store.Open(context.Background(), output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var count int
+	if err := restored.DB().QueryRow("SELECT count(*) FROM memories").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("restored count = %d, %v", count, err)
 	}
 }
 
