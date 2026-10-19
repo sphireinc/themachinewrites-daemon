@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
@@ -14,6 +16,8 @@ type loopAdapter struct {
 	backoff  *supervisor.Backoff
 	after    func(time.Duration) <-chan time.Time
 }
+
+var terminateSignals = []os.Signal{os.Interrupt, syscall.SIGTERM}
 
 func (a loopAdapter) Once(ctx context.Context) error { return a.cycle.Once(ctx) }
 func (a loopAdapter) Run(ctx context.Context) error {

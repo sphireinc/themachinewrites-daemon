@@ -16,7 +16,11 @@ type Config struct {
 	RuntimeDir      string        `yaml:"runtime_dir"`
 	CodexExecutable string        `yaml:"codex_executable"`
 	CodexTimeout    time.Duration `yaml:"codex_timeout"`
+	CodexModel      string        `yaml:"codex_model"`
+	CodexHome       string        `yaml:"codex_home"`
 	PublicRepoPath  string        `yaml:"public_repo_path"`
+	PublicBranch    string        `yaml:"public_branch"`
+	PublicRemote    string        `yaml:"public_remote"`
 	Budget          Budget        `yaml:"budget"`
 	DryRun          bool          `yaml:"dry_run"`
 }
@@ -35,7 +39,11 @@ func Default() Config {
 		RuntimeDir:      "./runtime",
 		CodexExecutable: "codex",
 		CodexTimeout:    10 * time.Minute,
+		CodexModel:      "",
+		CodexHome:       "",
 		PublicRepoPath:  "",
+		PublicBranch:    "main",
+		PublicRemote:    "",
 		Budget: Budget{
 			DailyModelInvocations: 8,
 			DailyInputTokens:      200000,
@@ -81,7 +89,11 @@ func applyEnvironment(cfg *Config, getenv func(string) string) {
 		"THEMACHINEWRITES_SOURCES_PATH":     &cfg.SourcesPath,
 		"THEMACHINEWRITES_RUNTIME_DIR":      &cfg.RuntimeDir,
 		"THEMACHINEWRITES_CODEX_EXECUTABLE": &cfg.CodexExecutable,
+		"THEMACHINEWRITES_CODEX_MODEL":      &cfg.CodexModel,
+		"THEMACHINEWRITES_CODEX_HOME":       &cfg.CodexHome,
 		"THEMACHINEWRITES_PUBLIC_REPO_PATH": &cfg.PublicRepoPath,
+		"THEMACHINEWRITES_PUBLIC_BRANCH":    &cfg.PublicBranch,
+		"THEMACHINEWRITES_PUBLIC_REMOTE":    &cfg.PublicRemote,
 	} {
 		if value := getenv(name); value != "" {
 			*target = value

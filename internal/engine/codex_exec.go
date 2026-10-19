@@ -80,6 +80,7 @@ type CodexExec struct {
 	Sandbox         string
 	Timeout         time.Duration
 	MaxOutputBytes  int
+	Model           string
 	Environment     []string
 	Workspace       string
 	SandboxRoot     string
@@ -124,6 +125,9 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 		"--output-schema", schemaPath, "--output-last-message", outputPath,
 		"--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--cd", c.Workspace, "-",
 	}
+	if strings.TrimSpace(c.Model) != "" {
+		args = append([]string{args[0], "--model", c.Model}, args[1:]...)
+	}
 	if commandRunner, ok := c.Runner.(*commandProcessRunner); ok && len(c.DeniedReadPaths) > 0 {
 		commandRunner.deniedReadPaths = append([]string(nil), c.DeniedReadPaths...)
 	}
@@ -154,7 +158,7 @@ func isolatedEnvironment(override, parent []string, home, tempDir string) ([]str
 	values := make(map[string]string)
 	for _, entry := range source {
 		key, value, ok := strings.Cut(entry, "=")
-		if !ok || !allowedCodexEnvironment[key] {
+		if !ok || !allowedCodexEnvironment[key] || key == "CODEX_HOME" {
 			continue
 		}
 		if key != "HOME" && key != "TMPDIR" {
@@ -172,12 +176,17 @@ func isolatedEnvironment(override, parent []string, home, tempDir string) ([]str
 			if !ok || !allowedCodexEnvironment[key] {
 				return nil, errors.New("codex environment contains a variable outside the allowlist")
 			}
+			if key == "CODEX_HOME" {
+				if err := requireDedicatedCodexHome(value); err != nil {
+					return nil, err
+				}
+			}
 			if key != "HOME" && key != "TMPDIR" {
 				values[key] = value
 			}
 		}
 	}
-	keys := []string{"PATH", "USER", "LANG", "LC_ALL", "GOCACHE", "GOMODCACHE", "HOME", "TMPDIR"}
+	keys := []string{"PATH", "USER", "LANG", "LC_ALL", "GOCACHE", "GOMODCACHE", "CODEX_HOME", "HOME", "TMPDIR"}
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if value, ok := values[key]; ok {
@@ -187,8 +196,19 @@ func isolatedEnvironment(override, parent []string, home, tempDir string) ([]str
 	return result, nil
 }
 
+func requireDedicatedCodexHome(path string) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("CODEX_HOME must be an absolute dedicated directory")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("CODEX_HOME must be an existing real directory")
+	}
+	return nil
+}
+
 var allowedCodexEnvironment = map[string]bool{
-	"PATH": true, "HOME": true, "USER": true, "TMPDIR": true, "LANG": true, "LC_ALL": true,
+	"PATH": true, "HOME": true, "USER": true, "TMPDIR": true, "LANG": true, "LC_ALL": true, "CODEX_HOME": true,
 	"GOCACHE": true, "GOMODCACHE": true,
 }
 

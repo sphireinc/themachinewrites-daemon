@@ -13,13 +13,21 @@ import (
 
 func TestLoadReadsTypedConfiguration(t *testing.T) {
 	directory := t.TempDir()
+	codexHome := filepath.Join(directory, "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(directory, "daemon.yaml")
 	content := `poll_interval: 15m
 sources_path: ./sources.yaml
 runtime_dir: ./runtime
 codex_executable: codex
 codex_timeout: 8m
+codex_model: gpt-6
+codex_home: CODEX_HOME_PLACEHOLDER
 public_repo_path: ./themachinewrites-public
+public_branch: main
+public_remote: https://github.com/example/public.git
 budget:
   daily_model_invocations: 12
   daily_input_tokens: 120000
@@ -27,6 +35,7 @@ budget:
   max_attempts: 3
 dry_run: true
 `
+	content = strings.ReplaceAll(content, "CODEX_HOME_PLACEHOLDER", codexHome)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +51,11 @@ dry_run: true
 		RuntimeDir:      "./runtime",
 		CodexExecutable: "codex",
 		CodexTimeout:    8 * time.Minute,
+		CodexModel:      "gpt-6",
+		CodexHome:       codexHome,
 		PublicRepoPath:  "./themachinewrites-public",
+		PublicBranch:    "main",
+		PublicRemote:    "https://github.com/example/public.git",
 		Budget: Budget{
 			DailyModelInvocations: 12,
 			DailyInputTokens:      120000,
@@ -86,7 +99,11 @@ func TestDefaultConfigurationHasNoCredentialsAndStartsDryRun(t *testing.T) {
 
 func TestLoadEnvyEnvironmentOverridesConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.yaml")
-	if err := os.WriteFile(path, []byte("dry_run: true\nsources_path: from-file\n"), 0o600); err != nil {
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("dry_run: true\nsources_path: from-file\ncodex_model: gpt-6\ncodex_home: "+codexHome+"\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	getenv := func(name string) string {
@@ -145,6 +162,7 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 	sources := filepath.Join(directory, "sources.yaml")
 	runtimeDirectory := filepath.Join(directory, "runtime")
 	publicRepository := filepath.Join(directory, "public")
+	codexHome := filepath.Join(directory, "codex-home")
 	if err := os.WriteFile(sources, []byte("sources: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -154,13 +172,20 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 	if err := os.Mkdir(publicRepository, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	valid := Config{
 		PollInterval:    10 * time.Minute,
 		SourcesPath:     sources,
 		RuntimeDir:      runtimeDirectory,
 		CodexExecutable: "codex",
 		CodexTimeout:    time.Minute,
+		CodexModel:      "gpt-6",
+		CodexHome:       codexHome,
 		PublicRepoPath:  publicRepository,
+		PublicBranch:    "main",
+		PublicRemote:    "https://github.com/example/public.git",
 		Budget: Budget{
 			DailyModelInvocations: 10,
 			DailyInputTokens:      100000,
@@ -183,7 +208,11 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 		{name: "empty sources path", change: func(c *Config) { c.SourcesPath = "" }, want: "sources_path"},
 		{name: "empty runtime dir", change: func(c *Config) { c.RuntimeDir = "" }, want: "runtime_dir"},
 		{name: "empty codex executable", change: func(c *Config) { c.CodexExecutable = "  " }, want: "codex_executable"},
+		{name: "empty codex model", change: func(c *Config) { c.CodexModel = "  " }, want: "codex_model"},
+		{name: "empty codex home", change: func(c *Config) { c.CodexHome = "" }, want: "codex_home"},
 		{name: "empty public repo", change: func(c *Config) { c.PublicRepoPath = "" }, want: "public_repo_path"},
+		{name: "empty public branch", change: func(c *Config) { c.PublicBranch = "" }, want: "public_branch"},
+		{name: "credential remote", change: func(c *Config) { c.PublicRemote = "https://token@example.org/public.git" }, want: "public_remote"},
 		{name: "zero invocation budget", change: func(c *Config) { c.Budget.DailyModelInvocations = 0 }, want: "daily_model_invocations"},
 		{name: "zero input budget", change: func(c *Config) { c.Budget.DailyInputTokens = 0 }, want: "daily_input_tokens"},
 		{name: "zero output budget", change: func(c *Config) { c.Budget.DailyOutputTokens = 0 }, want: "daily_output_tokens"},

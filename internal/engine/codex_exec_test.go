@@ -143,6 +143,48 @@ func TestCodexExecChildHasSanitizedEnvironmentAndSyntheticHome(t *testing.T) {
 	}
 }
 
+func TestCodexExecPassesOnlyDedicatedCodexHome(t *testing.T) {
+	root, workspace, tempDir := codexSandboxDirs(t)
+	codexHome := filepath.Join(root, "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"No."}`)}
+	code := CodexExec{
+		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		SandboxRoot: root, Workspace: workspace, TempDir: tempDir, Runner: runner,
+		Environment: []string{"PATH=/usr/bin", "CODEX_HOME=" + codexHome},
+	}
+	if _, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{}`}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	joined := strings.Join(runner.env, "\n")
+	if !strings.Contains(joined, "CODEX_HOME="+codexHome) {
+		t.Fatalf("dedicated CODEX_HOME absent: %#v", runner.env)
+	}
+	for _, required := range []string{"HOME=" + filepath.Join(root, "home"), "TMPDIR=" + tempDir, "PATH=/usr/bin"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("environment %#v missing %q", runner.env, required)
+		}
+	}
+}
+
+func TestCodexExecRejectsPublisherSecretEvenWithCodexHome(t *testing.T) {
+	root, workspace, tempDir := codexSandboxDirs(t)
+	codexHome := filepath.Join(root, "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code := CodexExec{
+		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		SandboxRoot: root, Workspace: workspace, TempDir: tempDir, Runner: &recordingRunner{result: []byte(`{}`)},
+		Environment: []string{"PATH=/usr/bin", "CODEX_HOME=" + codexHome, "THEMACHINEWRITES_GIT_PUBLISH_TOKEN=forbidden"},
+	}
+	if _, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{}`}); err == nil {
+		t.Fatal("publisher token was accepted into Codex environment")
+	}
+}
+
 func TestCodexExecCanApplyNativeFilesystemDenial(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("native sandbox integration is macOS-only")

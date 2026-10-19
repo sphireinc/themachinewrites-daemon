@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
 
@@ -18,13 +22,33 @@ func TestRunDispatchesSupportedCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(directory, "daemon.yaml")
-	content := "dry_run: true\nsources_path: " + sourcesPath + "\nruntime_dir: runtime\npublic_repo_path: public\n"
+	codexHome := filepath.Join(directory, "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	public := filepath.Join(directory, "public")
+	if err := os.Mkdir(public, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeDirectory := filepath.Join(directory, "runtime")
+	if err := os.Mkdir(runtimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "dry_run: true\nsources_path: " + sourcesPath + "\nruntime_dir: " + runtimeDirectory + "\ncodex_model: gpt-6\ncodex_home: " + codexHome + "\npublic_repo_path: " + public + "\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n"
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	called := false
+	factory := func(_ context.Context, cfg config.Config, _ sources.Configuration) (supervisor.Cycle, func() error, error) {
+		called = true
+		return supervisor.Cycle{DryRun: cfg.DryRun, Poll: func(context.Context) []error { return nil }}, func() error { return nil }, nil
+	}
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"once", "--config", configPath}, &stdout, &stderr); code != 0 {
+	if code := runWithFactory([]string{"once", "--config", configPath}, &stdout, &stderr, factory); code != 0 {
 		t.Fatalf("once exit=%d stderr=%s", code, stderr.String())
+	}
+	if !called {
+		t.Fatal("once did not construct the supervisor cycle")
 	}
 	if !strings.Contains(stdout.String(), "once complete") {
 		t.Fatalf("stdout=%q", stdout.String())
@@ -74,9 +98,13 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 
 func TestValidateConfigLoadsDryRunWithoutCredentials(t *testing.T) {
 	directory := t.TempDir()
+	codexHome := filepath.Join(directory, "codex-home")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(directory, "daemon.yaml")
 	content := "dry_run: true\nsources_path: sources.yaml\nruntime_dir: runtime\n" +
-		"public_repo_path: public\n"
+		"codex_model: gpt-6\ncodex_home: " + codexHome + "\npublic_repo_path: public\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +139,16 @@ func TestValidateConfigFailureDoesNotLeakYAMLCredential(t *testing.T) {
 func TestValidateConfigFailsForLiveModeWithoutPublishCredential(t *testing.T) {
 	directory := t.TempDir()
 	repository := filepath.Join(directory, "public")
+	codexHome := filepath.Join(directory, "codex-home")
 	if err := os.Mkdir(repository, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(directory, "daemon.yaml")
 	content := "dry_run: false\nsources_path: sources.yaml\nruntime_dir: runtime\n" +
-		"public_repo_path: " + repository + "\n"
+		"codex_model: gpt-6\ncodex_home: " + codexHome + "\npublic_repo_path: " + repository + "\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
