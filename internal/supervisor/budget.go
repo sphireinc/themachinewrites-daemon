@@ -38,3 +38,7 @@ func (b *Budget) reserve(now time.Time, in, out int) error {
 	b.output += out
 	return nil
 }
+
+func (b *Budget) Reserve(now time.Time, inputTokens, outputTokens int) error {
+	return b.reserve(now, inputTokens, outputTokens)
+}

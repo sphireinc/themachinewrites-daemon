@@ -35,6 +35,17 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.CodexExecutable) == "" {
 		problems = append(problems, errors.New("codex_executable is required"))
 	}
+	if strings.TrimSpace(c.CodexModel) == "" {
+		problems = append(problems, errors.New("codex_model is required"))
+	}
+	if strings.TrimSpace(c.CodexHome) == "" || !filepath.IsAbs(c.CodexHome) {
+		problems = append(problems, errors.New("codex_home must be an absolute dedicated directory"))
+	} else if info, err := os.Lstat(c.CodexHome); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		problems = append(problems, errors.New("codex_home must be an existing real directory"))
+	}
+	if strings.TrimSpace(c.PublicBranch) == "" || strings.ContainsAny(c.PublicBranch, " \t\r\n") {
+		problems = append(problems, errors.New("public_branch is required and must be a simple branch name"))
+	}
 	if c.Budget.DailyModelInvocations <= 0 {
 		problems = append(problems, errors.New("budget.daily_model_invocations must be greater than zero"))
 	}
@@ -49,6 +60,10 @@ func (c Config) Validate() error {
 	}
 	if !c.DryRun && !filepath.IsAbs(c.PublicRepoPath) {
 		problems = append(problems, errors.New("public_repo_path must be absolute when dry_run is false"))
+	}
+	parsedRemote, err := url.Parse(c.PublicRemote)
+	if err != nil || parsedRemote.Scheme != "https" || parsedRemote.Hostname() == "" || parsedRemote.User != nil || parsedRemote.RawQuery != "" || parsedRemote.Fragment != "" {
+		problems = append(problems, errors.New("public_remote must be a credential-free HTTPS URL"))
 	}
 	return errors.Join(problems...)
 }

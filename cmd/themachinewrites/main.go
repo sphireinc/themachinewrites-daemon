@@ -17,6 +17,8 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
 
+type supervisorFactory func(context.Context, config.Config, sources.Configuration) (supervisor.Cycle, func() error, error)
+
 const usage = `Usage: themachinewrites <command>
 
 Commands:
@@ -31,6 +33,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithFactory(args, stdout, stderr, buildSupervisorCycle)
+}
+
+func runWithFactory(args []string, stdout, stderr io.Writer, factory supervisorFactory) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -40,7 +46,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "validate-config":
 		return runValidateConfig(args[1:], stdout, stderr)
 	case "run", "once":
-		return runSupervisor(args[0], args[1:], stdout, stderr)
+		return runSupervisorWithFactory(args[0], args[1:], stdout, stderr, factory)
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	default:
@@ -94,6 +100,10 @@ func valueOrNone(value string) string {
 }
 
 func runSupervisor(command string, args []string, stdout, stderr io.Writer) int {
+	return runSupervisorWithFactory(command, args, stdout, stderr, buildSupervisorCycle)
+}
+
+func runSupervisorWithFactory(command string, args []string, stdout, stderr io.Writer, factory supervisorFactory) int {
 	path, ok := configPath(args)
 	if !ok {
 		fmt.Fprintln(stderr, "usage: themachinewrites "+command+" [--config PATH]")
@@ -109,7 +119,12 @@ func runSupervisor(command string, args []string, stdout, stderr io.Writer) int 
 		logging.New(stderr).Error("source configuration failed", "event", "supervisor.sources", "error", err)
 		return 1
 	}
-	cycle := supervisor.Cycle{DryRun: cfg.DryRun, Poll: func(context.Context) []error { return nil }}
+	cycle, closeRuntime, err := factory(context.Background(), cfg, sourceConfig)
+	if err != nil {
+		logging.New(stderr).Error("supervisor runtime failed", "event", "supervisor.runtime", "error", err)
+		return 1
+	}
+	defer closeRuntime()
 	adapter := loopAdapter{cycle: cycle, interval: cfg.PollInterval, backoff: supervisor.NewBackoff(time.Second, cfg.PollInterval, nil)}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

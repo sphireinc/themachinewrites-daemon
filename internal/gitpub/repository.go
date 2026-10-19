@@ -3,6 +3,7 @@ package gitpub
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,17 @@ type result struct {
 
 type commandRunner struct{}
 
+type authenticatedRunner struct{ token string }
+
 func (commandRunner) Run(ctx context.Context, executable string, args, env []string, stdin []byte) result {
+	return runGitProcess(ctx, executable, args, env, stdin)
+}
+
+func (r authenticatedRunner) Run(ctx context.Context, executable string, args, env []string, stdin []byte) result {
+	return runGitProcess(ctx, executable, args, authenticatedGitEnvironment(env, r.token), stdin)
+}
+
+func runGitProcess(ctx context.Context, executable string, args, env []string, stdin []byte) result {
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(stdin)
@@ -32,6 +43,23 @@ func (commandRunner) Run(ctx context.Context, executable string, args, env []str
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	return result{stdout: stdout.String(), stderr: stderr.String(), err: err}
+}
+
+func authenticatedGitEnvironment(environment []string, token string) []string {
+	encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	result := append([]string(nil), environment...)
+	return append(result,
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic "+encoded,
+	)
+}
+
+func AuthenticatedRepository(ctx context.Context, config RepositoryConfig, token string) (*Repository, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("GitHub token is required")
+	}
+	return OpenRepository(ctx, config, authenticatedRunner{token: token})
 }
 
 type RepositoryConfig struct {

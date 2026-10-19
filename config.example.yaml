@@ -4,7 +4,11 @@ sources_path: ./sources.yaml
 runtime_dir: ./runtime
 codex_executable: codex
 codex_timeout: 8m
+codex_model: codex-configured-model
+codex_home: /replace/with/dedicated/codex/home
 public_repo_path: /replace/with/absolute/public/repository
+public_branch: main
+public_remote: https://github.com/OWNER/themachinewrites-public.git
 budget:
   daily_model_invocations: 12
   daily_input_tokens: 120000
