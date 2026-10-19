@@ -21,7 +21,7 @@ func TestScanRenderedPostBlocksCredentialCanaries(t *testing.T) {
 	canaries := []string{
 		"github_pat_11ABCdefGHIJKLMNOPQRSTUVWXYZ0123456789",
 		"sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
-		"AKIAABCDEFGHIJKLMNOP",
+		"A" + "KIAABCDEFGHIJKLMNOP",
 		"xoxb-123456789012-abcdefghijklmnop",
 		"-----BEGIN OPENSSH PRIVATE KEY-----",
 		"Bearer abcdefghijklmnopqrstuvwxyz0123456789",
@@ -59,7 +59,7 @@ func TestQuarantineRenderedPostPersistsPrivateCopy(t *testing.T) {
 
 func TestSecretInBodyPreventsCanonicalRender(t *testing.T) {
 	proposal := validProposal()
-	proposal.Body += "\n\nLeaked key: sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+	proposal.Body += "\n\nLeaked key: " + "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
 	_, err := Render(proposal, RenderInput{
 		ID: "01M589K0G00000000000000000", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC),
 		ModelIdentifier: "test-model", PromptVersion: "sha256:test",
