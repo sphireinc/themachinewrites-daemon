@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestMemoryReconciliationRequiresConfirmedCommit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Reconcile(ctx, runtime, "post-one", ""); err == nil {
+	if err := Reconcile(ctx, runtime, "post-one", "", func(context.Context, string, string) (bool, error) { return true, nil }); err == nil {
 		t.Fatal("empty remote commit accepted")
 	}
 	before, err := List(ctx, runtime)
@@ -33,7 +34,7 @@ func TestMemoryReconciliationRequiresConfirmedCommit(t *testing.T) {
 	if before[0].CommitSHA != "" {
 		t.Fatalf("memory marked published before confirmation: %#v", before[0])
 	}
-	if err := Reconcile(ctx, runtime, "post-one", "sha-confirmed"); err != nil {
+	if err := Reconcile(ctx, runtime, "post-one", "sha-confirmed", func(context.Context, string, string) (bool, error) { return true, nil }); err != nil {
 		t.Fatal(err)
 	}
 	after, err := List(ctx, runtime)
@@ -42,5 +43,11 @@ func TestMemoryReconciliationRequiresConfirmedCommit(t *testing.T) {
 	}
 	if after[0].CommitSHA != "sha-confirmed" {
 		t.Fatalf("commit SHA = %q, want confirmed", after[0].CommitSHA)
+	}
+	if err := Reconcile(ctx, runtime, "post-one", "sha-different", func(context.Context, string, string) (bool, error) { return true, nil }); !errors.Is(err, ErrCommitConflict) {
+		t.Fatalf("different SHA error = %v, want ErrCommitConflict", err)
+	}
+	if err := Reconcile(ctx, runtime, "post-one", "sha-unverified", func(context.Context, string, string) (bool, error) { return false, nil }); err == nil {
+		t.Fatal("unverified post accepted")
 	}
 }
