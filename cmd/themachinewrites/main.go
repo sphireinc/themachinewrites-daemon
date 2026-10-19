@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
 )
 
 const usage = `Usage: themachinewrites <command>
@@ -31,12 +34,53 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "validate-config":
 		return runValidateConfig(args[1:], stdout, stderr)
 	case "run", "once":
-		fmt.Fprintf(stdout, "%s command not implemented\n", args[0])
-		return 0
+		return runSupervisor(args[0], args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runSupervisor(command string, args []string, stdout, stderr io.Writer) int {
+	path, ok := configPath(args)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: themachinewrites "+command+" [--config PATH]")
+		return 2
+	}
+	cfg, err := config.LoadEnvy(path, os.Getenv)
+	if err != nil {
+		logging.New(stderr).Error("supervisor configuration failed", "event", "supervisor.config", "error", err)
+		return 1
+	}
+	sourceConfig, err := sources.LoadConfiguration(cfg.SourcesPath)
+	if err != nil {
+		logging.New(stderr).Error("source configuration failed", "event", "supervisor.sources", "error", err)
+		return 1
+	}
+	cycle := supervisor.Cycle{DryRun: cfg.DryRun, Poll: func(context.Context) []error { return nil }}
+	adapter := loopAdapter{cycle: cycle, interval: cfg.PollInterval}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if command == "once" {
+		if err := adapter.Once(ctx); err != nil {
+			logging.New(stderr).Error("supervisor cycle failed", "event", "supervisor.once", "error", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "once complete (dry_run=%t, enabled_sources=%d)\n", cfg.DryRun, enabledCount(sourceConfig))
+		return 0
+	}
+	fmt.Fprintf(stdout, "supervisor starting (dry_run=%t, enabled_sources=%d)\n", cfg.DryRun, enabledCount(sourceConfig))
+	return 0
+}
+
+func enabledCount(configuration sources.Configuration) int {
+	count := 0
+	for _, source := range configuration.Sources {
+		if source.Enabled {
+			count++
+		}
+	}
+	return count
 }
 
 func runValidateConfig(args []string, stdout, stderr io.Writer) int {
