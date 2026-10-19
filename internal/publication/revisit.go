@@ -39,5 +39,5 @@ func BuildRevisitCandidates(posts []PostRecord, now time.Time, minAge time.Durat
 
 func RevisitPrompt(candidates []RevisitCandidate) string {
 	raw, _ := json.Marshal(candidates)
-	return "Review these matured predictions and choose investigate, defer, publish a revisit, or publish a correction: " + string(raw)
+	return "Review these matured predictions and choose investigate, defer, publish a follow-up analysis/reflection, or publish a correction linked to the original: " + string(raw)
 }
