@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 )
 
 func TestRunDispatchesSupportedCommands(t *testing.T) {
@@ -34,9 +37,26 @@ func TestRunHelpListsEverySubcommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit code = %d, stderr = %q", code, stderr.String())
 	}
-	for _, command := range []string{"run", "once", "validate-config"} {
+	for _, command := range []string{"run", "once", "validate-config", "status"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("help output %q does not mention %q", stdout.String(), command)
+		}
+	}
+}
+
+func TestStatusPrintsPausedReasonAndLastTimes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	if err := telemetry.WriteHealth(path, telemetry.Health{LastConfirmedPush: &at, PausedReason: "budget_limit"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"status", "--snapshot", path}, &stdout, &stderr); code != 0 {
+		t.Fatalf("status exit=%d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"paused_reason: budget_limit", "last_confirmed_push: 2026-10-18T20:00:00Z", "last_poll: never"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("status output missing %q: %s", want, stdout.String())
 		}
 	}
 }
