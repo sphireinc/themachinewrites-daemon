@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var ErrPublicationConflict = errors.New("publication acknowledgement conflicts with confirmed commit")
@@ -72,6 +73,64 @@ func (s *Store) AcknowledgePublication(ctx context.Context, postID, commitSHA, a
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit publication acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RestorePublicationAcknowledgement(ctx context.Context, postID, commitSHA string) error {
+	if strings.TrimSpace(postID) == "" || strings.TrimSpace(commitSHA) == "" {
+		return errors.New("post_id and commit_sha are required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	jobID := "publish-" + postID
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin publication restoration: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO jobs(job_id, state, post_id, created_at, updated_at)
+		VALUES (?, 'published', ?, ?, ?)
+		ON CONFLICT(job_id) DO NOTHING`,
+		jobID, postID, now, now); err != nil {
+		return fmt.Errorf("restore publication job: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO publication_outbox(post_id, job_id, state, commit_sha, created_at, updated_at)
+		VALUES (?, ?, 'published', ?, ?, ?)
+		ON CONFLICT(post_id) DO NOTHING`,
+		postID, jobID, commitSHA, now, now); err != nil {
+		return fmt.Errorf("restore publication outbox: %w", err)
+	}
+
+	var storedJobID, state string
+	var existing sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT job_id, state, commit_sha FROM publication_outbox WHERE post_id = ?`,
+		postID).Scan(&storedJobID, &state, &existing); err != nil {
+		return fmt.Errorf("read restored publication: %w", err)
+	}
+	if existing.Valid && existing.String != "" && existing.String != commitSHA {
+		return ErrPublicationConflict
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE publication_outbox
+		SET state = 'published', commit_sha = ?, updated_at = ?
+		WHERE post_id = ?`,
+		commitSHA, now, postID); err != nil {
+		return fmt.Errorf("mark restored outbox published: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET state = 'published', commit_sha = ?, lease_deadline = NULL,
+		    worker_id = NULL, last_error = NULL, updated_at = ?
+		WHERE job_id = ? AND post_id = ?`,
+		commitSHA, now, storedJobID, postID); err != nil {
+		return fmt.Errorf("mark restored job published: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit publication restoration: %w", err)
 	}
 	return nil
 }

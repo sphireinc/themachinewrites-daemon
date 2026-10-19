@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
@@ -29,6 +30,7 @@ Commands:
   validate-config  validate daemon configuration
   status           print local daemon health snapshot
   backup           create a verified online SQLite backup
+  reconcile-public rebuild publication acknowledgements from remote Git history
 `
 
 func main() {
@@ -54,6 +56,8 @@ func runWithFactory(args []string, stdout, stderr io.Writer, factory supervisorF
 		return runStatus(args[1:], stdout, stderr)
 	case "backup":
 		return runBackup(args[1:], stdout, stderr)
+	case "reconcile-public":
+		return runReconcilePublic(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -102,6 +106,39 @@ func backupArguments(args []string) (string, string, bool) {
 		index++
 	}
 	return configFile, destination, configFile != "" && destination != ""
+}
+
+func runReconcilePublic(args []string, stdout, stderr io.Writer) int {
+	configFile, ok := configPath(args)
+	if !ok {
+		fmt.Fprintln(stderr, "usage: themachinewrites reconcile-public [--config PATH]")
+		return 2
+	}
+	cfg, err := config.LoadEnvy(configFile, os.Getenv)
+	if err != nil {
+		logging.New(stderr).Error("reconciliation configuration failed", "error", err)
+		return 1
+	}
+	repository, err := gitpub.OpenRepository(context.Background(), gitpub.RepositoryConfig{
+		Root: cfg.PublicRepoPath, Branch: cfg.PublicBranch, Remote: "origin", ExpectedRemote: cfg.PublicRemote,
+	}, nil)
+	if err != nil {
+		logging.New(stderr).Error("reconciliation repository open failed", "error", err)
+		return 1
+	}
+	runtime, err := store.Open(context.Background(), filepath.Join(cfg.RuntimeDir, "runtime.sqlite"))
+	if err != nil {
+		logging.New(stderr).Error("reconciliation database open failed", "error", err)
+		return 1
+	}
+	defer runtime.Close()
+	result, err := gitpub.ReconcilePublic(context.Background(), repository, runtime)
+	if err != nil {
+		logging.New(stderr).Error("publication reconciliation failed", "error", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "reconciled %d publication(s) at %s\n", len(result.PostIDs), result.CommitSHA)
+	return 0
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
