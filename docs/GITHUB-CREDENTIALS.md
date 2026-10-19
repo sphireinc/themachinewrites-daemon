@@ -33,12 +33,12 @@ Store the credential in the environment of the dedicated publisher service as
 Codex prompt text, logs or a URL. The deterministic publisher reads it only for Git
 operations; the Codex child environment explicitly excludes it.
 
-Use an HTTPS remote for the public repository. Avoid credential helpers that can read a
-global credential store. The implementation currently validates an exact expected remote
-URL but does not inject the environment token into Git itself. Before live publication,
-add a repository-scoped authentication mechanism that uses this token without persisting
-it; a credential helper or SSH agent supplied to the daemon must also be restricted to
-the same public repository.
+Use the exact HTTPS remote configured for the public repository. The daemon validates
+that remote against `public_remote`, then injects the token as a temporary Git HTTP
+`extraheader` only into Git subprocesses created by the authenticated publisher. The token
+is not written to Git config or repository files, and the Codex child environment excludes
+it. Keep the credential itself restricted to the public repository as described above;
+do not use a global credential helper or share this token with another repository.
 
 ## Manual permission audit
 
