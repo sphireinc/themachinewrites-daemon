@@ -62,7 +62,7 @@ func TestRunHelpListsEverySubcommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit code = %d, stderr = %q", code, stderr.String())
 	}
-	for _, command := range []string{"run", "once", "validate-config", "status", "backup"} {
+	for _, command := range []string{"run", "once", "validate-config", "status", "backup", "reconcile-public"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("help output %q does not mention %q", stdout.String(), command)
 		}
@@ -201,5 +201,29 @@ func TestValidateConfigFailsForLiveModeWithoutPublishCredential(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "THEMACHINEWRITES_GIT_PUBLISH_TOKEN") {
 		t.Fatalf("stderr = %q, want missing-credential variable name", stderr.String())
+	}
+}
+
+func TestReconcilePublicCommandRejectsNonHTTPSRemote(t *testing.T) {
+	directory := t.TempDir()
+	runtimeDir := filepath.Join(directory, "runtime")
+	codexHome := filepath.Join(directory, "codex-home")
+	public := filepath.Join(directory, "public")
+	for _, path := range []string{runtimeDir, codexHome, public} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configPath := filepath.Join(directory, "daemon.yaml")
+	content := "dry_run: true\nsources_path: sources.yaml\nruntime_dir: " + runtimeDir + "\ncodex_model: gpt-6\ncodex_home: " + codexHome + "\npublic_repo_path: " + public + "\npublic_branch: main\npublic_remote: " + filepath.Join(directory, "remote.git") + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"reconcile-public", "--config", configPath}, &stdout, &stderr); code == 0 {
+		t.Fatal("reconcile-public accepted a non-HTTPS remote")
+	}
+	if !strings.Contains(stderr.String(), "public_remote must be a credential-free HTTPS URL") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
