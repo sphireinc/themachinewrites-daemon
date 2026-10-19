@@ -3,6 +3,7 @@ package publication
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -41,4 +42,21 @@ func ValidateCorrectionByTime(targetAt, newAt time.Time) error {
 		return fmt.Errorf("correction target must precede new publication")
 	}
 	return nil
+}
+
+func ValidateCorrectionDraft(posts []PostRecord, newID string, newPublishedAt time.Time, targetID string) error {
+	if strings.TrimSpace(newID) == "" || newID == targetID {
+		return errors.New("correction ID must be nonempty and differ from target")
+	}
+	var target *PostRecord
+	for index := range posts {
+		if posts[index].ID == targetID {
+			target = &posts[index]
+			break
+		}
+	}
+	if target == nil {
+		return errors.New("correction target does not exist")
+	}
+	return ValidateCorrectionByTime(target.PublishedAt, newPublishedAt)
 }
