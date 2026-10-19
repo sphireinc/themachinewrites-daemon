@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/memory"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/prompts"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
@@ -35,6 +37,7 @@ type Runtime struct {
 	MaxCandidates   int
 	Budget          *supervisor.Budget
 	MaxOutputTokens int
+	MemoryMaxItems  int
 }
 
 func (r Runtime) Poll(ctx context.Context) []error {
@@ -113,7 +116,29 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, bundle, err := observations.BuildBundle(items, observations.BundleLimits{MaxItems: len(items), MaxBytes: 128 * 1024})
+	record, bundle, err := observations.BuildBundle(items, observations.BundleLimits{MaxItems: len(items), MaxBytes: 128 * 1024})
+	if err != nil {
+		return err
+	}
+	topics := make([]string, 0)
+	for _, item := range items {
+		if item.Category != "" {
+			topics = append(topics, item.Category)
+		}
+	}
+	retrieved, err := memory.Retrieve(ctx, r.Store, memory.RetrievalOptions{Topics: topics, MaxItems: r.memoryItems(), MaxBytes: 16 * 1024})
+	if err != nil {
+		return err
+	}
+	record.Memory = retrieved.JSON
+	corpus, err := publication.LoadCorpus(r.PublicRoot)
+	if err != nil {
+		return err
+	}
+	if revisit := publication.BuildRevisitCandidates(corpus.Posts, r.now(), 30*24*time.Hour); len(revisit) > 0 {
+		record.RevisitPrompt = publication.RevisitPrompt(revisit)
+	}
+	bundle, err = json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -206,6 +231,13 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		r.Emitter.Emit(ctx, telemetry.EventPushConfirmed, postID, 0, "commit_sha", result.CommitSHA)
 	}
 	return nil
+}
+
+func (r Runtime) memoryItems() int {
+	if r.MemoryMaxItems < 1 || r.MemoryMaxItems > 20 {
+		return 8
+	}
+	return r.MemoryMaxItems
 }
 
 func (r Runtime) maxCandidates() int {

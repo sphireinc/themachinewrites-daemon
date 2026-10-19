@@ -18,10 +18,12 @@ type BundleLimits struct {
 }
 
 type Bundle struct {
-	SchemaVersion        int          `json:"schema_version"`
-	GeneratedAt          time.Time    `json:"generated_at"`
-	SourceMaterialPolicy string       `json:"source_material_policy"`
-	Items                []BundleItem `json:"items"`
+	SchemaVersion        int             `json:"schema_version"`
+	GeneratedAt          time.Time       `json:"generated_at"`
+	SourceMaterialPolicy string          `json:"source_material_policy"`
+	Memory               json.RawMessage `json:"memory,omitempty"`
+	RevisitPrompt        string          `json:"revisit_prompt,omitempty"`
+	Items                []BundleItem    `json:"items"`
 }
 
 type BundleItem struct {

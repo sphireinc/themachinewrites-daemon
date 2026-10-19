@@ -2,6 +2,7 @@ package publication
 
 import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,6 +30,9 @@ func TestRevisitPromptKeepsDeferAvailable(t *testing.T) {
 	prompt := RevisitPrompt([]RevisitCandidate{candidate})
 	if prompt == "" {
 		t.Fatal("empty prompt")
+	}
+	if strings.Contains(prompt, "publish a revisit") || !strings.Contains(prompt, "correction linked") || !strings.Contains(prompt, candidate.ID) {
+		t.Fatalf("revisit prompt is incompatible with v1 contract: %s", prompt)
 	}
 	_ = engine.ActionDefer
 }
