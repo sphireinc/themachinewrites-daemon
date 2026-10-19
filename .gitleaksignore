@@ -1,2 +1,4 @@
 # Synthetic, nonfunctional AWS-key fixture used by secretscan_test.go.
 e40cfeb6a6d1e66f3b21e44e7fb9256c6e68515f:internal/publication/secretscan_test.go:aws-access-token:24
+# Synthetic canary fixture exercised by the security workflow's negative test.
+2993c359b299a81b9390f29a8bc9854bace22b19:.github/workflows/security.yml:tmw-deterministic-canary:31
