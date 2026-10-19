@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"Nothing meaningful."}`)}
+	root, workspace, tempDir := codexSandboxDirs(t)
 	exec := CodexExec{
 		Executable:     "codex",
 		Sandbox:        "read-only",
@@ -19,8 +22,9 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 		MaxOutputBytes: 4096,
 		Environment:    []string{"PATH=/usr/bin:/bin", "HOME=/private/tmp/home"},
 		Runner:         runner,
-		TempDir:        t.TempDir(),
-		Workspace:      t.TempDir(),
+		SandboxRoot:    root,
+		TempDir:        tempDir,
+		Workspace:      workspace,
 	}
 	output, err := exec.Run(context.Background(), Input{Instructions: "trusted instructions", Bundle: `{"items":[]}`})
 	if err != nil {
@@ -41,14 +45,16 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 }
 
 func TestCodexExecCancelsHungProcess(t *testing.T) {
+	root, workspace, tempDir := codexSandboxDirs(t)
 	exec := CodexExec{
 		Executable:     "codex",
 		Sandbox:        "read-only",
 		Timeout:        40 * time.Millisecond,
 		MaxOutputBytes: 4096,
 		Runner:         &hangingRunner{},
-		TempDir:        t.TempDir(),
-		Workspace:      t.TempDir(),
+		SandboxRoot:    root,
+		TempDir:        tempDir,
+		Workspace:      workspace,
 	}
 	started := time.Now()
 	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
@@ -62,10 +68,11 @@ func TestCodexExecCancelsHungProcess(t *testing.T) {
 
 func TestCodexExecRejectsEnvironmentCredentialCanary(t *testing.T) {
 	token := "canary-git-secret"
+	root, workspace, tempDir := codexSandboxDirs(t)
 	exec := CodexExec{
 		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
 		Environment: []string{"PATH=/usr/bin", "THEMACHINEWRITES_GIT_PUBLISH_TOKEN=" + token},
-		Runner:      &recordingRunner{result: []byte(`{}`)}, TempDir: t.TempDir(), Workspace: t.TempDir(),
+		Runner:      &recordingRunner{result: []byte(`{}`)}, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
 	}
 	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
 	if err == nil || strings.Contains(err.Error(), token) {
@@ -74,22 +81,80 @@ func TestCodexExecRejectsEnvironmentCredentialCanary(t *testing.T) {
 }
 
 func TestCodexExecRejectsUnapprovedEnvironmentAndRequiresEmptyWorkspace(t *testing.T) {
-	workspace := t.TempDir()
+	root, workspace, tempDir := codexSandboxDirs(t)
 	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"No."}`)}
 	exec := CodexExec{
 		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
 		Workspace: workspace, Environment: []string{"PATH=/usr/bin", "MY_TOKEN_ALIAS=secret-value"},
-		Runner: runner, TempDir: t.TempDir(),
+		Runner: runner, SandboxRoot: root, TempDir: tempDir,
 	}
 	_, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
 	if err == nil || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("Run() error = %v, want unapproved environment rejection", err)
 	}
 	exec.Environment = []string{"PATH=/usr/bin"}
-	exec.Workspace = ""
+	exec.SandboxRoot = ""
 	if _, err := exec.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"}); err == nil {
-		t.Fatal("Run() accepted missing isolated workspace")
+		t.Fatal("Run() accepted missing isolated sandbox root")
 	}
+}
+
+func TestCodexExecChildHasSanitizedEnvironmentAndSyntheticHome(t *testing.T) {
+	goBinary, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go executable unavailable")
+	}
+	executable, err := filepath.Abs("testdata/fake-codex/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, workspace, tempDir := codexSandboxDirs(t)
+	t.Setenv("THEMACHINEWRITES_GIT_PUBLISH_TOKEN", "environment-secret-canary")
+	code := CodexExec{
+		Executable: goBinary, Sandbox: "read-only", Timeout: 10 * time.Second,
+		MaxOutputBytes: 64 * 1024, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
+		Runner: &commandProcessRunner{prefix: []string{"run", executable, "--mode", "canary"}},
+	}
+	output, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Home                string `json:"home"`
+		CWD                 string `json:"cwd"`
+		PublishTokenPresent bool   `json:"publish_token_present"`
+	}
+	if err := json.Unmarshal(output.Stdout, &result); err != nil {
+		t.Fatalf("decode fixture result %q: %v", output.Stdout, err)
+	}
+	if result.PublishTokenPresent {
+		t.Fatalf("fixture received environment canary: %#v", result)
+	}
+	expectedHome, homeErr := filepath.EvalSymlinks(filepath.Join(root, "home"))
+	expectedTemp, tempErr := filepath.EvalSymlinks(tempDir)
+	actualHome, actualHomeErr := filepath.EvalSymlinks(result.Home)
+	actualTemp, actualTempErr := filepath.EvalSymlinks(result.CWD)
+	if homeErr != nil || tempErr != nil || actualHomeErr != nil || actualTempErr != nil || actualHome != expectedHome || actualTemp != expectedTemp {
+		t.Fatalf("fixture sandbox paths = home %q cwd %q", result.Home, result.CWD)
+	}
+}
+
+func codexSandboxDirs(t *testing.T) (string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	tempDir := filepath.Join(root, "tmp")
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root, workspace, tempDir
 }
 
 type recordingRunner struct {

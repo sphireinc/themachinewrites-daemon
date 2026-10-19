@@ -40,9 +40,9 @@ func Probe(ctx context.Context, executable string, runner commandRunner) (Compat
 	if compareVersions(version, MinimumCodexVersion) < 0 {
 		return Compatibility{}, fmt.Errorf("codex CLI version %s is below minimum %s; run the documented upgrade check", version, MinimumCodexVersion)
 	}
-	help, helpErr, helpErrValue := runner(ctx, executable, "exec", "--help")
-	if helpErrValue != nil {
-		return Compatibility{}, fmt.Errorf("codex exec help probe failed: %w: %s", helpErrValue, bounded(string(helpErr), 300))
+	help, securityErr, securityErrValue := runner(ctx, executable, "exec", "--help")
+	if securityErrValue != nil {
+		return Compatibility{}, fmt.Errorf("codex exec help probe failed: %w: %s", securityErrValue, bounded(string(securityErr), 300))
 	}
 	required := []string{"--output-schema", "--output-last-message", "--json", "--sandbox"}
 	for _, flag := range required {
@@ -50,7 +50,18 @@ func Probe(ctx context.Context, executable string, runner commandRunner) (Compat
 			return Compatibility{}, fmt.Errorf("codex exec lacks required supported flag %s", flag)
 		}
 	}
+	_, securityErr, securityErrValue = runner(ctx, executable, policyProbeArgs()...)
+	if securityErrValue != nil {
+		return Compatibility{}, fmt.Errorf("codex exec security policy probe failed: %w: %s", securityErrValue, bounded(string(securityErr), 300))
+	}
 	return Compatibility{Version: version, SupportsExec: true}, nil
+}
+
+func policyProbeArgs() []string {
+	return []string{
+		"exec", "--config", `approval_policy="never"`, "--config", `web_search="disabled"`,
+		"--config", "sandbox_workspace_write.network_access=false", "--help",
+	}
 }
 
 func parseVersion(output string) (string, error) {
