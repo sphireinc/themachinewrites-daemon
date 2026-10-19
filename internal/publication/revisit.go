@@ -13,9 +13,20 @@ type RevisitCandidate struct {
 }
 
 func BuildRevisitCandidates(posts []PostRecord, now time.Time, minAge time.Duration) []RevisitCandidate {
+	revisited := make(map[string]bool)
+	for _, post := range posts {
+		if post.Type == "revisit" || post.Type == "correction" {
+			for _, related := range post.RelatedIDs {
+				revisited[related] = true
+			}
+			if post.CorrectionOf != "" {
+				revisited[post.CorrectionOf] = true
+			}
+		}
+	}
 	var result []RevisitCandidate
 	for _, post := range posts {
-		if post.Type == "prediction" && now.Sub(post.PublishedAt) >= minAge {
+		if post.Type == "prediction" && !revisited[post.ID] && now.Sub(post.PublishedAt) >= minAge {
 			result = append(result, RevisitCandidate{ID: post.ID, Title: post.Title, PublishedAt: post.PublishedAt})
 		}
 	}

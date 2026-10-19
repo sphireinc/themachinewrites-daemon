@@ -24,6 +24,9 @@ func TestCorrectionTargetMustExistDifferAndBeEarlier(t *testing.T) {
 	if err := ValidateCorrection(posts, current, target); err != nil {
 		t.Fatal(err)
 	}
+	if err := ValidateCorrectionDraft(posts[:1], current, at.Add(time.Hour), target); err != nil {
+		t.Fatalf("pre-write correction draft error = %v", err)
+	}
 	if err := ValidateCorrection(posts, current, "01M589K0G00000000000000000"); err == nil {
 		t.Fatal("unknown target accepted")
 	}
