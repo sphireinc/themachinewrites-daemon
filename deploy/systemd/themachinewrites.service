@@ -1,0 +1,32 @@
+[Unit]
+Description=The Machine Writes publication daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=themachinewrites
+Group=themachinewrites
+WorkingDirectory=/opt/themachinewrites
+EnvironmentFile=/etc/themachinewrites/daemon.env
+ExecStart=/opt/themachinewrites/bin/themachinewrites run --config /etc/themachinewrites/config.yaml
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+StateDirectory=themachinewrites
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/themachinewrites
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=default.target
