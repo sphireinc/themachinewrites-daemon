@@ -134,3 +134,30 @@ func (s *Store) RestorePublicationAcknowledgement(ctx context.Context, postID, c
 	}
 	return nil
 }
+
+func (s *Store) OutstandingPublicationIDs(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT post_id FROM jobs WHERE post_id IS NOT NULL
+		UNION
+		SELECT post_id FROM publication_outbox`)
+	if err != nil {
+		return nil, fmt.Errorf("read local publication IDs: %w", err)
+	}
+	defer rows.Close()
+	result := map[string]bool{}
+	for rows.Next() {
+		var postID string
+		if err := rows.Scan(&postID); err != nil {
+			return nil, fmt.Errorf("scan local publication ID: %w", err)
+		}
+		postID = strings.TrimSpace(postID)
+		if len(postID) != 26 {
+			return nil, fmt.Errorf("invalid local publication ID %q", postID)
+		}
+		result[postID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate local publication IDs: %w", err)
+	}
+	return result, nil
+}

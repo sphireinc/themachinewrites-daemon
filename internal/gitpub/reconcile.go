@@ -120,3 +120,42 @@ func validCommitSHA(value string) bool {
 	}
 	return true
 }
+
+// RemotePostIDs returns the set of canonical post IDs in the configured
+// remote branch without modifying local acknowledgements or Git history.
+func RemotePostIDs(ctx context.Context, repo *Repository) (map[string]bool, error) {
+	if repo == nil {
+		return nil, errors.New("public repository is required")
+	}
+	remoteRef := repo.Remote + "/" + repo.Branch
+	if _, err := repo.run(ctx, "fetch", repo.Remote); err != nil {
+		return nil, fmt.Errorf("refresh publication history: %w", err)
+	}
+	sha, err := repo.run(ctx, "rev-parse", "--verify", remoteRef+"^{commit}")
+	if err != nil {
+		return nil, fmt.Errorf("resolve publication commit: %w", err)
+	}
+	sha = strings.TrimSpace(sha)
+	if !validCommitSHA(sha) {
+		return nil, errors.New("publication remote returned an invalid commit SHA")
+	}
+	tree, err := repo.run(ctx, "ls-tree", "-r", "-z", "--name-only", sha, "--", "posts")
+	if err != nil {
+		return nil, fmt.Errorf("list publication posts: %w", err)
+	}
+	ids := map[string]bool{}
+	for _, path := range strings.Split(tree, "\x00") {
+		if path == "" {
+			continue
+		}
+		record, err := readRemotePost(ctx, repo, sha, path)
+		if err != nil {
+			return nil, err
+		}
+		if ids[record.ID] {
+			return nil, fmt.Errorf("remote publication history contains duplicate post ID %s", record.ID)
+		}
+		ids[record.ID] = true
+	}
+	return ids, nil
+}
