@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
@@ -58,8 +62,8 @@ func runSupervisor(command string, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 	cycle := supervisor.Cycle{DryRun: cfg.DryRun, Poll: func(context.Context) []error { return nil }}
-	adapter := loopAdapter{cycle: cycle, interval: cfg.PollInterval}
-	ctx, cancel := context.WithCancel(context.Background())
+	adapter := loopAdapter{cycle: cycle, interval: cfg.PollInterval, backoff: supervisor.NewBackoff(time.Second, cfg.PollInterval, nil)}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if command == "once" {
 		if err := adapter.Once(ctx); err != nil {
@@ -70,6 +74,10 @@ func runSupervisor(command string, args []string, stdout, stderr io.Writer) int 
 		return 0
 	}
 	fmt.Fprintf(stdout, "supervisor starting (dry_run=%t, enabled_sources=%d)\n", cfg.DryRun, enabledCount(sourceConfig))
+	if err := adapter.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logging.New(stderr).Error("supervisor stopped", "event", "supervisor.run", "error", err)
+		return 1
+	}
 	return 0
 }
 
