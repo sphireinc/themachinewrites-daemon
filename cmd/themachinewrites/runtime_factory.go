@@ -37,6 +37,10 @@ func buildSupervisorCycleWith(
 		return supervisor.Cycle{}, func() error { return nil }, err
 	}
 	closeRuntime := func() error { return runtime.Close() }
+	if _, err := runtime.RequeueInterruptedCandidates(ctx, now()); err != nil {
+		closeRuntime()
+		return supervisor.Cycle{}, func() error { return nil }, err
+	}
 	fetcher := sources.NewFetcher(sources.NewURLValidator(nil, false))
 	codexEngine, err := engine.NewBoundedCodexEngine(engine.FactoryConfig{
 		Executable: cfg.CodexExecutable, Model: cfg.CodexModel, Timeout: cfg.CodexTimeout,

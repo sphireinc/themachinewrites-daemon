@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,6 +37,17 @@ type captureEngine struct{ input engine.Input }
 func (e *captureEngine) Run(_ context.Context, input engine.Input) (engine.Proposal, error) {
 	e.input = input
 	return engine.Proposal{Action: engine.ActionDefer, Reason: "Captured."}, nil
+}
+
+type publishEngine struct{}
+
+func (publishEngine) Run(context.Context, engine.Input) (engine.Proposal, error) {
+	return engine.Proposal{
+		Action: engine.ActionPublish, Reason: "Fixture publication.",
+		Title: "A fixture publication", Type: "observation", Body: "A complete fixture observation.",
+		Sources: []engine.Source{{Title: "Fixture", URL: "https://example.org/source", RetrievedAt: "2026-10-18T20:00:00Z"}},
+		Topics:  []string{"technology"}, ConfidenceRationale: "One fixture source.",
+	}, nil
 }
 
 func TestRuntimePollsIngestsAndDefersInDryRun(t *testing.T) {
@@ -184,6 +196,102 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 	}
 	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "correction linked") {
 		t.Fatalf("bundle omitted matured prediction context: %s", capture.input.Bundle)
+	}
+}
+
+func TestBudgetExhaustionLeavesCandidatePendingForNextDay(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := store.Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	if _, err := observations.Ingest(ctx, runtime, observations.Candidate{
+		URL: "https://example.org/one", Headline: "Fixture headline", SourceID: "fixture", SourceName: "Fixture",
+		PublishedAt: at, RetrievedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	budget := supervisor.NewBudget(at, supervisor.BudgetLimits{Invocations: 0, InputTokens: 1, OutputTokens: 1, MaxRetries: 1})
+	daemon := Runtime{Store: runtime, Engine: deferEngine{}, PublicRoot: t.TempDir(), Now: func() time.Time { return at }, Budget: budget}
+	if err := daemon.DecideAndPublish(ctx); err == nil {
+		t.Fatal("budget-exhausted cycle unexpectedly succeeded")
+	}
+	candidates, err := runtime.PendingCandidates(ctx, 10)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("budget failure stranded candidate: %#v, %v", candidates, err)
+	}
+}
+
+func TestDryRunPublicationKeepsCandidatePending(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := store.Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	if _, err := observations.Ingest(ctx, runtime, observations.Candidate{
+		URL: "https://example.org/one", Headline: "Fixture headline", SourceID: "fixture", SourceName: "Fixture",
+		PublishedAt: at, RetrievedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publicRoot := t.TempDir()
+	daemon := Runtime{Store: runtime, Engine: publishEngine{}, PublicRoot: publicRoot, DryRun: true, Now: func() time.Time { return at }}
+	if err := daemon.DecideAndPublish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := runtime.PendingCandidates(ctx, 10)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("dry run did not retain candidate: %#v, %v", candidates, err)
+	}
+	if _, err := os.Stat(filepath.Join(publicRoot, "posts")); !os.IsNotExist(err) {
+		t.Fatalf("dry run wrote publication files: %v", err)
+	}
+}
+
+func TestInterruptedCandidateReusesReservedPostID(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "runtime.sqlite")
+	runtime, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	if _, err := observations.Ingest(ctx, runtime, observations.Candidate{
+		URL: "https://example.org/one", Headline: "Fixture headline", SourceID: "fixture", SourceName: "Fixture",
+		PublishedAt: at, RetrievedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := runtime.PendingCandidates(ctx, 10)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, %v", candidates, err)
+	}
+	reservedAt := at.Truncate(time.Millisecond)
+	reservedID, err := publication.GenerateID(candidates[0].Fingerprint, reservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ReserveCandidates(ctx, []store.CandidateReservation{{Fingerprint: candidates[0].Fingerprint, PostID: reservedID, At: reservedAt}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err = store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if _, err := runtime.RequeueInterruptedCandidates(ctx, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = runtime.PendingCandidates(ctx, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].DecisionPostID != reservedID || candidates[0].PublicationAt == "" {
+		t.Fatalf("reservation lost across restart: %#v, %v", candidates, err)
 	}
 }
 
