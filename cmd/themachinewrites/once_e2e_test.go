@@ -25,7 +25,7 @@ import (
 // deterministic RSS fixture and fake Codex output. It uses a local bare Git remote
 // and never contacts GitHub, Cloudflare, or a paid model.
 func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
-	for _, tool := range []string{"python3", "git"} {
+	for _, tool := range []string{"python3", "git", "go"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skip(tool + " unavailable")
 		}
@@ -62,6 +62,12 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(configFile), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	fakeCodex := filepath.Join(root, "fake-codex")
+	build := exec.Command("go", "build", "-o", fakeCodex, "./internal/integration/testdata/fake-codex")
+	build.Dir = filepath.Join("..", "..")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake codex: %v: %s", err, output)
+	}
 
 	factory := func(ctx context.Context, cfg config.Config, configured sources.Configuration) (supervisor.Cycle, func() error, error) {
 		// The CLI validates a production HTTPS remote; the fixture publisher targets
@@ -82,8 +88,16 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 			runtime.Close()
 			return supervisor.Cycle{}, func() error { return nil }, err
 		}
+		codexEngine, err := engine.NewBoundedCodexEngine(engine.FactoryConfig{
+			Executable: fakeCodex, Model: cfg.CodexModel, Timeout: cfg.CodexTimeout,
+			SandboxRoot: filepath.Join(cfg.RuntimeDir, "codex-sandbox"), CodexHome: cfg.CodexHome,
+		})
+		if err != nil {
+			runtime.Close()
+			return supervisor.Cycle{}, func() error { return nil }, err
+		}
 		runtimeCycle := daemon.Runtime{
-			Sources: configured, Fetcher: fixtureFetcher{}, Store: runtime, Engine: fakePublishEngine{},
+			Sources: configured, Fetcher: fixtureFetcher{}, Store: runtime, Engine: codexEngine,
 			PublicRoot: cfg.PublicRepoPath, ModelName: cfg.CodexModel, Now: func() time.Time { return at },
 			Publisher: repository, Outbox: runtime, MaxCandidates: 20, MaxOutputTokens: 4000,
 			Budget: supervisor.NewBudget(at, supervisor.BudgetLimits{Invocations: 1, InputTokens: 100000, OutputTokens: 4000, MaxRetries: 2}),
@@ -104,6 +118,15 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 	if strings.Count(tree, "posts/") != 1 {
 		t.Fatalf("remote tree does not contain exactly one post:\n%s", tree)
 	}
+	postPath := ""
+	for _, line := range strings.Split(strings.TrimSpace(tree), "\n") {
+		if strings.HasPrefix(line, "posts/") {
+			postPath = line
+		}
+	}
+	if postPath == "" {
+		t.Fatalf("remote tree has no post path:\n%s", tree)
+	}
 	latest := gitFixtureOutput(t, remote, "show", remoteHead+":feed/latest.json")
 	var latestDocument struct {
 		SchemaVersion int `json:"schema_version"`
@@ -114,7 +137,7 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 	if err := json.Unmarshal([]byte(latest), &latestDocument); err != nil {
 		t.Fatalf("decode latest feed: %v", err)
 	}
-	if latestDocument.SchemaVersion != 1 || len(latestDocument.Posts) != 1 || latestDocument.Posts[0].Title != "A careful observation" {
+	if latestDocument.SchemaVersion != 1 || len(latestDocument.Posts) != 1 || latestDocument.Posts[0].Title != "A fixture observation" {
 		t.Fatalf("published latest feed = %s", latest)
 	}
 	for _, manifest := range []string{"feed/catalog.json", "feed/stats.json", "feed/relations.json"} {
@@ -124,6 +147,28 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 		}
 		if err := json.Unmarshal([]byte(body), &document); err != nil || document.SchemaVersion != 1 {
 			t.Fatalf("%s is not canonical schema v1: %s", manifest, body)
+		}
+	}
+	postMarkdown := gitFixtureOutput(t, remote, "show", remoteHead+":"+postPath)
+	if !strings.Contains(postMarkdown, "schema_version: 1") || !strings.Contains(postMarkdown, "A fixture observation") {
+		t.Fatalf("canonical post is incomplete: %s", postMarkdown)
+	}
+	if exportRoot := os.Getenv("TMW_E2E_ARTIFACT_DIR"); exportRoot != "" {
+		if err := os.MkdirAll(filepath.Join(exportRoot, "feed"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(exportRoot, "post-path.txt"), []byte(postPath), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(exportRoot, "feed", "latest.json"), []byte(latest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		postExport := filepath.Join(exportRoot, filepath.FromSlash(postPath))
+		if err := os.MkdirAll(filepath.Dir(postExport), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(postExport, []byte(postMarkdown), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -159,24 +204,6 @@ type fixtureFetcher struct{}
 func (fixtureFetcher) Fetch(context.Context, *url.URL, sources.Cursor) (sources.FetchResult, error) {
 	rss := `<rss version="2.0"><channel><item><guid>fixture-once</guid><title>A fixture observation</title><link>https://example.org/observation</link><pubDate>Sun, 18 Oct 2026 20:00:00 GMT</pubDate><description>A bounded supported observation.</description></item></channel></rss>`
 	return sources.FetchResult{Body: []byte(rss), ETag: `"fixture"`}, nil
-}
-
-type fakePublishEngine struct{}
-
-func (fakePublishEngine) Run(context.Context, engine.Input) (engine.Proposal, error) {
-	return engine.Proposal{
-		Action: engine.ActionPublish,
-		Reason: "The fixture supports one bounded observation.",
-		Title:  "A careful observation",
-		Type:   "observation",
-		Body:   "The fixture contains a factual observation that supports this bounded analysis.",
-		Sources: []engine.Source{{
-			Title: "Fixture", URL: "https://example.org/observation", RetrievedAt: "2026-10-18T20:00:00Z",
-		}},
-		Topics:              []string{"technology"},
-		RelatedIDs:          []string{},
-		ConfidenceRationale: "One deterministic fixture source supports the bounded observation.",
-	}, nil
 }
 
 func gitFixtureOutput(t *testing.T, repository string, args ...string) string {
