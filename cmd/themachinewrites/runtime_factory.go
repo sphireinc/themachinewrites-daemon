@@ -60,7 +60,8 @@ func buildSupervisorCycleWith(
 	metrics := &telemetry.Metrics{}
 	cycleRuntime := daemon.Runtime{
 		Sources: sourceConfig, Fetcher: fetcher, Store: runtime, Engine: codexEngine,
-		PublicRoot: cfg.PublicRepoPath, ModelName: cfg.CodexModel, Now: now, DryRun: cfg.DryRun,
+		PublicRoot: cfg.PublicRepoPath, HealthPath: filepath.Join(cfg.RuntimeDir, "health.json"),
+		ModelName: cfg.CodexModel, Now: now, DryRun: cfg.DryRun,
 		Metrics: metrics, MaxCandidates: 20, MaxOutputTokens: cfg.Budget.DailyOutputTokens,
 		Budget: supervisor.NewBudget(now(), supervisor.BudgetLimits{
 			Invocations: cfg.Budget.DailyModelInvocations, InputTokens: cfg.Budget.DailyInputTokens,

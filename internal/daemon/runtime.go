@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ type Runtime struct {
 	Publisher       gitpub.Publisher
 	Outbox          gitpub.Outbox
 	PublicRoot      string
+	HealthPath      string
 	ModelName       string
 	Now             func() time.Time
 	DryRun          bool
@@ -79,6 +81,16 @@ func (r Runtime) Poll(ctx context.Context) []error {
 				r.Emitter.Emit(ctx, telemetry.EventCandidate, item.GUID, 0, "source_id", source.ID)
 			}
 		}
+	}
+	if err := r.writeHealth(func(health *telemetry.Health) {
+		health.LastPoll = timePointer(now)
+		if len(errorsFound) > 0 {
+			health.LastErrorKind = "source_failure"
+		} else {
+			health.LastErrorKind = ""
+		}
+	}); err != nil {
+		errorsFound = append(errorsFound, err)
 	}
 	return errorsFound
 }
@@ -203,8 +215,20 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
 		return err
 	}
+	if err := r.writeHealth(func(health *telemetry.Health) {
+		health.LastModelCall = timePointer(r.now())
+		health.LastErrorKind = ""
+	}); err != nil {
+		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+		return err
+	}
 	if decision.ContentCandidate == nil {
 		if err := r.Store.SetCandidateDecision(ctx, fingerprints, "deferred", r.now()); err != nil {
+			return err
+		}
+		if err := r.writeHealth(func(health *telemetry.Health) {
+			health.PausedReason = "insufficient_evidence"
+		}); err != nil {
 			return err
 		}
 		if r.Emitter != nil {
@@ -264,6 +288,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		return err
 	}
 	if err := r.Store.SetCandidateDecision(ctx, fingerprints, "published", r.now()); err != nil {
+		return err
+	}
+	if err := r.writeHealth(func(health *telemetry.Health) {
+		health.LastConfirmedPush = timePointer(r.now())
+		health.PausedReason = ""
+	}); err != nil {
 		return err
 	}
 	evidenceLinks := make([]string, 0, len(decision.ContentCandidate.Sources))
@@ -349,6 +379,27 @@ func (r Runtime) now() time.Time {
 		return time.Now().UTC()
 	}
 	return r.Now().UTC()
+}
+
+func (r Runtime) writeHealth(update func(*telemetry.Health)) error {
+	if strings.TrimSpace(r.HealthPath) == "" {
+		return nil
+	}
+	health := telemetry.EmptyHealth()
+	if _, err := os.Stat(r.HealthPath); err == nil {
+		existing, readErr := telemetry.ReadHealth(r.HealthPath)
+		if readErr != nil {
+			return readErr
+		}
+		health = existing
+	}
+	update(&health)
+	return telemetry.WriteHealth(r.HealthPath, health)
+}
+
+func timePointer(value time.Time) *time.Time {
+	value = value.UTC()
+	return &value
 }
 
 func toObservationCandidates(items []store.Candidate) ([]observations.Candidate, error) {
