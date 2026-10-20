@@ -9,11 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/daemon"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
 )
 
 func TestHostileSourceRemainsInertAndCannotWriteOutsidePublicAllowlist(t *testing.T) {
@@ -39,6 +42,25 @@ func TestHostileSourceRemainsInertAndCannotWriteOutsidePublicAllowlist(t *testin
 		t.Fatal(err)
 	}
 	defer runtime.Close()
+	repo, err := gitpub.OpenRepository(ctx, gitpub.RepositoryConfig{
+		Root: topology.Public, Branch: "main", Remote: "origin", ExpectedRemote: topology.PublicRemote,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostileRuntime := daemon.Runtime{
+		Store: runtime, Engine: hostileProposalEngine{}, PublicRoot: topology.Public,
+		ModelName: "fixture-model", Now: func() time.Time { return at }, Publisher: repo, Outbox: runtime,
+		WorkerID: "hostile-e2e", MaxCandidates: 20, MaxOutputTokens: 4000,
+		Budget: supervisor.NewBudget(at, supervisor.BudgetLimits{Invocations: 1, InputTokens: 100000, OutputTokens: 4000, MaxRetries: 1}),
+	}
+	headBefore := git(t, topology.PublicRemote, "rev-parse", "refs/heads/main")
+	if err := hostileRuntime.DecideAndPublish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if headAfter := git(t, topology.PublicRemote, "rev-parse", "refs/heads/main"); headAfter != headBefore {
+		t.Fatalf("hostile proposal advanced remote: %s -> %s", headBefore, headAfter)
+	}
 	if inserted, err := observations.Ingest(ctx, runtime, observations.Candidate{URL: items[0].URL, Headline: items[0].Headline, SourceID: items[0].SourceID, SourceName: items[0].SourceName, Category: items[0].Category, PublishedAt: items[0].PublishedAt, Excerpt: items[0].Excerpt, RetrievedAt: items[0].RetrievedAt}); err != nil || !inserted {
 		t.Fatalf("safe ingestion = %t, %v", inserted, err)
 	}
@@ -63,4 +85,16 @@ func TestHostileSourceRemainsInertAndCannotWriteOutsidePublicAllowlist(t *testin
 	if _, err := os.Stat(outside); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside path was created: %v", err)
 	}
+}
+
+type hostileProposalEngine struct{}
+
+func (hostileProposalEngine) Run(context.Context, engine.Input) (engine.Proposal, error) {
+	return engine.Proposal{
+		Action: engine.ActionPublish, Reason: "attempt",
+		Title: "Hostile publication", Type: "observation",
+		Body:    "<script>alert(1)</script>",
+		Sources: []engine.Source{{Title: "Source", URL: "https://example.org/hostile", RetrievedAt: "2026-10-18T20:00:00Z"}},
+		Topics:  []string{"technology"}, ConfidenceRationale: "Attempted injection.",
+	}, nil
 }
