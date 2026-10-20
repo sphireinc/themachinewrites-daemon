@@ -131,23 +131,52 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 	var latestDocument struct {
 		SchemaVersion int `json:"schema_version"`
 		Posts         []struct {
-			Title string `json:"title"`
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			PublishedAt string `json:"published_at"`
 		} `json:"posts"`
 	}
 	if err := json.Unmarshal([]byte(latest), &latestDocument); err != nil {
 		t.Fatalf("decode latest feed: %v", err)
 	}
-	if latestDocument.SchemaVersion != 1 || len(latestDocument.Posts) != 1 || latestDocument.Posts[0].Title != "A fixture observation" {
+	if latestDocument.SchemaVersion != 1 || len(latestDocument.Posts) != 1 {
 		t.Fatalf("published latest feed = %s", latest)
 	}
-	for _, manifest := range []string{"feed/catalog.json", "feed/stats.json", "feed/relations.json"} {
-		body := gitFixtureOutput(t, remote, "show", remoteHead+":"+manifest)
-		var document struct {
-			SchemaVersion int `json:"schema_version"`
-		}
-		if err := json.Unmarshal([]byte(body), &document); err != nil || document.SchemaVersion != 1 {
-			t.Fatalf("%s is not canonical schema v1: %s", manifest, body)
-		}
+	card := latestDocument.Posts[0]
+	if card.Title != "A fixture observation" || card.ID == "" || card.PublishedAt == "" {
+		t.Fatalf("published card is incomplete: %#v", card)
+	}
+	wantPath := "posts/" + card.PublishedAt[:4] + "/" + card.PublishedAt[5:7] + "/" + card.PublishedAt[8:10] + "/" + card.ID + ".md"
+	if postPath != wantPath {
+		t.Fatalf("post path %q does not match card ID/date; want %q", postPath, wantPath)
+	}
+	var catalog struct {
+		SchemaVersion int `json:"schema_version"`
+		Months        []struct {
+			Month string `json:"month"`
+			Count int    `json:"count"`
+		} `json:"months"`
+	}
+	if err := json.Unmarshal([]byte(gitFixtureOutput(t, remote, "show", remoteHead+":feed/catalog.json")), &catalog); err != nil || catalog.SchemaVersion != 1 || len(catalog.Months) != 1 || catalog.Months[0].Count != 1 || catalog.Months[0].Month != card.PublishedAt[:7] {
+		t.Fatalf("catalog does not reflect one published post: %#v, %v", catalog, err)
+	}
+	var stats struct {
+		SchemaVersion   int    `json:"schema_version"`
+		TotalPosts      int    `json:"total_posts"`
+		LastPublishedAt string `json:"last_published_at"`
+		ByType          struct {
+			Observation int `json:"observation"`
+		} `json:"by_type"`
+	}
+	if err := json.Unmarshal([]byte(gitFixtureOutput(t, remote, "show", remoteHead+":feed/stats.json")), &stats); err != nil || stats.SchemaVersion != 1 || stats.TotalPosts != 1 || stats.ByType.Observation != 1 || !strings.HasPrefix(stats.LastPublishedAt, card.PublishedAt) {
+		t.Fatalf("stats do not reflect one observation: %#v, %v", stats, err)
+	}
+	var relations struct {
+		SchemaVersion int                 `json:"schema_version"`
+		Relations     map[string][]string `json:"relations"`
+	}
+	if err := json.Unmarshal([]byte(gitFixtureOutput(t, remote, "show", remoteHead+":feed/relations.json")), &relations); err != nil || relations.SchemaVersion != 1 || len(relations.Relations) != 0 {
+		t.Fatalf("relations are not truthfully empty: %#v, %v", relations, err)
 	}
 	postMarkdown := gitFixtureOutput(t, remote, "show", remoteHead+":"+postPath)
 	if !strings.Contains(postMarkdown, "schema_version: 1") || !strings.Contains(postMarkdown, "A fixture observation") {
@@ -161,6 +190,9 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(exportRoot, "feed", "latest.json"), []byte(latest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(exportRoot, "remote-sha.txt"), []byte(remoteHead), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		postExport := filepath.Join(exportRoot, filepath.FromSlash(postPath))
