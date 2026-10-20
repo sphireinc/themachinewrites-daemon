@@ -182,6 +182,19 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 	if !strings.Contains(postMarkdown, "schema_version: 1") || !strings.Contains(postMarkdown, "A fixture observation") {
 		t.Fatalf("canonical post is incomplete: %s", postMarkdown)
 	}
+	monthPath := "feed/months/" + card.PublishedAt[:7] + ".json"
+	monthFeed := gitFixtureOutput(t, remote, "show", remoteHead+":"+monthPath)
+	var month struct {
+		SchemaVersion int    `json:"schema_version"`
+		Month         string `json:"month"`
+		Total         int    `json:"total"`
+		Posts         []struct {
+			ID string `json:"id"`
+		} `json:"posts"`
+	}
+	if err := json.Unmarshal([]byte(monthFeed), &month); err != nil || month.SchemaVersion != 1 || month.Month != card.PublishedAt[:7] || month.Total != 1 || len(month.Posts) != 1 || month.Posts[0].ID != card.ID {
+		t.Fatalf("month feed does not reflect the published card: %#v, %v", month, err)
+	}
 	if exportRoot := os.Getenv("TMW_E2E_ARTIFACT_DIR"); exportRoot != "" {
 		if err := os.MkdirAll(filepath.Join(exportRoot, "feed"), 0o700); err != nil {
 			t.Fatal(err)
@@ -190,6 +203,15 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(exportRoot, "feed", "latest.json"), []byte(latest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(exportRoot, "feed", "months"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(exportRoot, "feed", "catalog.json"), []byte(gitFixtureOutput(t, remote, "show", remoteHead+":feed/catalog.json")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(exportRoot, "feed", "months", filepath.Base(monthPath)), []byte(monthFeed), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(exportRoot, "remote-sha.txt"), []byte(remoteHead), 0o600); err != nil {
@@ -202,6 +224,89 @@ func TestOncePublishesFixtureRSSThroughFakeCodex(t *testing.T) {
 		if err := os.WriteFile(postExport, []byte(postMarkdown), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestOnceDryRunUsesRealCycleWithoutPublishing verifies the smoke-check dry run:
+// the real CLI cycle validates config and performs a model decision, but leaves the
+// disposable public remote untouched and records no confirmed push.
+func TestOnceDryRunUsesRealCycleWithoutPublishing(t *testing.T) {
+	for _, tool := range []string{"python3", "git", "go"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " unavailable")
+		}
+	}
+	root := t.TempDir()
+	topology := createOnceTopology(t, filepath.Join(root, "topology"))
+	public, remote := topology.Public, topology.PublicRemote
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	runtimeDir, codexHome := filepath.Join(root, "runtime"), filepath.Join(root, "codex-home")
+	for _, directory := range []string{runtimeDir, codexHome} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourcesPath := filepath.Join(root, "sources.yaml")
+	if err := os.WriteFile(sourcesPath, []byte("sources:\n  - id: fixture\n    url: https://fixture.example/feed.xml\n    enabled: true\n    request_interval: 1m\n    name: Fixture\n    category: technology\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "daemon.yaml")
+	configFile := "dry_run: true\n" +
+		"sources_path: " + sourcesPath + "\nruntime_dir: " + runtimeDir + "\n" +
+		"codex_executable: fixture\ncodex_timeout: 5s\ncodex_model: fixture-model\ncodex_home: " + codexHome + "\n" +
+		"public_repo_path: " + public + "\npublic_branch: main\npublic_remote: https://github.com/example/public.git\n" +
+		"budget:\n  daily_model_invocations: 1\n  daily_input_tokens: 100000\n  daily_output_tokens: 4000\n  max_attempts: 2\n"
+	if err := os.WriteFile(configPath, []byte(configFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeCodex := filepath.Join(root, "fake-codex")
+	build := exec.Command("go", "build", "-o", fakeCodex, "./internal/integration/testdata/fake-codex")
+	build.Dir = filepath.Join("..", "..")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake codex: %v: %s", err, output)
+	}
+	headBefore := strings.TrimSpace(gitFixtureOutput(t, remote, "rev-parse", "refs/heads/main"))
+	treeBefore := gitFixtureOutput(t, remote, "ls-tree", "-r", "--name-only", headBefore)
+	latestBefore := gitFixtureOutput(t, remote, "show", headBefore+":feed/latest.json")
+	factory := func(ctx context.Context, cfg config.Config, configured sources.Configuration) (supervisor.Cycle, func() error, error) {
+		runtime, err := store.Open(ctx, filepath.Join(cfg.RuntimeDir, "runtime.sqlite"))
+		if err != nil {
+			return supervisor.Cycle{}, func() error { return nil }, err
+		}
+		if _, err := runtime.RequeueInterruptedCandidates(ctx, at); err != nil {
+			runtime.Close()
+			return supervisor.Cycle{}, func() error { return nil }, err
+		}
+		codexEngine, err := engine.NewBoundedCodexEngine(engine.FactoryConfig{
+			Executable: fakeCodex, Model: cfg.CodexModel, Timeout: cfg.CodexTimeout,
+			SandboxRoot: filepath.Join(cfg.RuntimeDir, "codex-sandbox"), CodexHome: cfg.CodexHome,
+		})
+		if err != nil {
+			runtime.Close()
+			return supervisor.Cycle{}, func() error { return nil }, err
+		}
+		cycleRuntime := daemon.Runtime{
+			Sources: configured, Fetcher: fixtureFetcher{}, Store: runtime, Engine: codexEngine,
+			PublicRoot: cfg.PublicRepoPath, HealthPath: filepath.Join(cfg.RuntimeDir, "health.json"),
+			ModelName: cfg.CodexModel, Now: func() time.Time { return at }, DryRun: true,
+			MaxCandidates: 20, MaxOutputTokens: 4000,
+			Budget: supervisor.NewBudget(at, supervisor.BudgetLimits{Invocations: 1, InputTokens: 100000, OutputTokens: 4000, MaxRetries: 2}),
+		}
+		return supervisor.Cycle{Poll: cycleRuntime.Poll, Decide: cycleRuntime.DecideAndPublish, DryRun: true}, runtime.Close, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runWithFactory([]string{"once", "--config", configPath}, &stdout, &stderr, factory); code != 0 {
+		t.Fatalf("dry-run once exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	headAfter := strings.TrimSpace(gitFixtureOutput(t, remote, "rev-parse", "refs/heads/main"))
+	if headAfter != headBefore {
+		t.Fatalf("dry run advanced remote HEAD: %s -> %s", headBefore, headAfter)
+	}
+	if treeAfter := gitFixtureOutput(t, remote, "ls-tree", "-r", "--name-only", headAfter); treeAfter != treeBefore {
+		t.Fatalf("dry run changed remote tree")
+	}
+	if latestAfter := gitFixtureOutput(t, remote, "show", headAfter+":feed/latest.json"); latestAfter != latestBefore {
+		t.Fatalf("dry run changed latest feed")
 	}
 }
 
