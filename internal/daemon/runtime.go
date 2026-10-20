@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type Runtime struct {
 	Outbox          gitpub.Outbox
 	PublicRoot      string
 	HealthPath      string
+	WorkerID        string
 	ModelName       string
 	Now             func() time.Time
 	DryRun          bool
@@ -188,6 +190,18 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if err != nil {
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
 		return err
+	}
+	if r.Publisher != nil && r.Outbox != nil && strings.TrimSpace(r.PublicRoot) != "" {
+		workerID := r.WorkerID
+		if strings.TrimSpace(workerID) == "" {
+			workerID = "daemon"
+		}
+		lease, err := supervisor.AcquireLease(filepath.Join(r.PublicRoot, ".git"), workerID)
+		if err != nil {
+			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+			return err
+		}
+		defer lease.Release()
 	}
 	started := time.Now()
 	if r.Emitter != nil {
