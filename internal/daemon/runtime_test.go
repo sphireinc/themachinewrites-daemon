@@ -17,6 +17,7 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/telemetry"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,6 +83,46 @@ func TestRuntimePollsIngestsAndDefersInDryRun(t *testing.T) {
 	}
 	if state != "deferred" || headline != "Fixture headline" {
 		t.Fatalf("candidate state/headline = %s/%s", state, headline)
+	}
+}
+
+func TestRuntimeRecordsDeferHealthAcrossSuccessfulFetches(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := store.Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	sourceURL := &sources.URL{}
+	if err := sourceURL.UnmarshalYAML(textNode("https://example.org/feed.xml")); err != nil {
+		t.Fatal(err)
+	}
+	healthPath := filepath.Join(t.TempDir(), "health.json")
+	at := time.Date(2026, 10, 18, 20, 1, 0, 0, time.UTC)
+	now := at
+	daemonRuntime := Runtime{
+		Sources: sources.Configuration{Sources: []sources.Source{{ID: "fixture", Name: "Fixture", Enabled: true, RequestInterval: time.Minute, URL: sourceURL}}},
+		Fetcher: fakeFetcher{}, Store: runtime, Engine: deferEngine{}, PublicRoot: t.TempDir(),
+		HealthPath: healthPath, DryRun: false, Now: func() time.Time { return now },
+	}
+	for cycle := 0; cycle < 3; cycle++ {
+		if errs := daemonRuntime.Poll(ctx); len(errs) > 0 {
+			t.Fatalf("cycle %d poll errors: %v", cycle, errs)
+		}
+		if err := daemonRuntime.DecideAndPublish(ctx); err != nil {
+			t.Fatalf("cycle %d decision: %v", cycle, err)
+		}
+		now = now.Add(time.Minute)
+	}
+	health, err := telemetry.ReadHealth(healthPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.LastPoll == nil || health.LastModelCall == nil || health.LastConfirmedPush != nil {
+		t.Fatalf("defer health = %#v", health)
+	}
+	if health.PausedReason != "insufficient_evidence" || health.LastErrorKind != "" {
+		t.Fatalf("defer health labels = %#v", health)
 	}
 }
 
