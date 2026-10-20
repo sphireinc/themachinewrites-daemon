@@ -11,18 +11,43 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 )
 
 type failFirstAckOutbox struct {
 	attempts int
 	sha      string
+	store    gitpub.Outbox
 }
 
-func (o *failFirstAckOutbox) SavePending(context.Context, string) error { return nil }
-func (o *failFirstAckOutbox) Acknowledge(_ context.Context, _ string, sha string) error {
+func (o *failFirstAckOutbox) SavePending(ctx context.Context, postID string) error {
+	return o.store.SavePending(ctx, postID)
+}
+func (o *failFirstAckOutbox) Acknowledge(ctx context.Context, postID string, sha string) error {
 	o.attempts++
 	if o.attempts == 1 {
 		return errors.New("simulated local acknowledgement crash")
+	}
+	if err := o.store.Acknowledge(ctx, postID, sha); err != nil {
+		return err
+	}
+	o.sha = sha
+	return nil
+}
+
+type successOutbox struct {
+	attempts int
+	sha      string
+	store    gitpub.Outbox
+}
+
+func (o *successOutbox) SavePending(ctx context.Context, postID string) error {
+	return o.store.SavePending(ctx, postID)
+}
+func (o *successOutbox) Acknowledge(ctx context.Context, postID string, sha string) error {
+	o.attempts++
+	if err := o.store.Acknowledge(ctx, postID, sha); err != nil {
+		return err
 	}
 	o.sha = sha
 	return nil
@@ -61,7 +86,12 @@ func TestPushSuccessThenAckCrashRecoversWithoutDuplicateCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outbox := &failFirstAckOutbox{}
+	runtimePath := filepath.Join(topology.Root, "runtime.sqlite")
+	firstStore, err := store.Open(ctx, runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox := &failFirstAckOutbox{store: firstStore}
 	request := gitpub.PublishRequest{PostID: id, Paths: paths, MaxPushAttempts: 2}
 	if _, err := gitpub.Publish(ctx, repo, outbox, request); err == nil || !strings.Contains(err.Error(), "acknowledgement crash") {
 		t.Fatalf("first publish error = %v", err)
@@ -70,12 +100,28 @@ func TestPushSuccessThenAckCrashRecoversWithoutDuplicateCommit(t *testing.T) {
 		t.Fatalf("attempts after simulated crash = %d", outbox.attempts)
 	}
 	headAfterCrash := strings.TrimSpace(git(t, topology.PublicRemote, "rev-parse", "refs/heads/main"))
-	result, err := gitpub.Publish(ctx, repo, outbox, request)
+	if err := firstStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restartedStore, err := store.Open(ctx, runtimePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.CommitSHA != headAfterCrash || outbox.sha != headAfterCrash || outbox.attempts != 2 {
-		t.Fatalf("recovery result=%#v outbox=%#v remote=%s", result, outbox, headAfterCrash)
+	defer restartedStore.Close()
+	restartedOutbox := &successOutbox{store: restartedStore}
+	result, err := gitpub.Publish(ctx, repo, restartedOutbox, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CommitSHA != headAfterCrash || restartedOutbox.sha != headAfterCrash || restartedOutbox.attempts != 1 {
+		t.Fatalf("recovery after restart result=%#v outbox=%#v remote=%s", result, restartedOutbox, headAfterCrash)
+	}
+	var storedState, storedSHA string
+	if err := restartedStore.DB().QueryRowContext(ctx, `SELECT state, commit_sha FROM publication_outbox WHERE post_id = ?`, id).Scan(&storedState, &storedSHA); err != nil {
+		t.Fatal(err)
+	}
+	if storedState != "published" || storedSHA != headAfterCrash {
+		t.Fatalf("persisted outbox after restart = %s/%s, want published/%s", storedState, storedSHA, headAfterCrash)
 	}
 	if count := strings.Count(git(t, topology.PublicRemote, "log", "--format=%H", headAfterCrash, "--", filepath.ToSlash(rendered.Path)), headAfterCrash); count != 1 {
 		t.Fatalf("recovery produced duplicate commit history")
