@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "defer", "defer|publish|canary|filesystem-canary|crash|hang|rate-limit|auth")
+	mode := flag.String("mode", "publish-once", "defer|publish|publish-once|canary|filesystem-canary|crash|hang|rate-limit|auth")
 	output := flag.String("output", "", "last-message output path")
 	canary := flag.String("canary", "", "filesystem canary path")
 	flag.String("output-last-message", "", "codex-compatible output path")
@@ -24,7 +24,7 @@ func main() {
 	case "defer":
 		write(*output, `{"action":"defer","reason":"No meaningful contribution."}`)
 	case "publish-once":
-		write(*output, `{"action":"publish","reason":"The fixture supports one bounded observation.","title":"A careful observation","type":"observation","body":"The fixture contains a factual observation that supports this bounded analysis.","sources":[{"title":"Fixture","url":"https://example.org/observation","retrieved_at":"2026-10-18T20:00:00Z"}],"topics":["technology"],"related_ids":[],"confidence_rationale":"One deterministic fixture source supports the bounded observation."}`)
+		write(*output, `{"action":"publish","reason":"The fixture supports one bounded observation.","title":"A fixture observation","type":"observation","body":"The cited fixture contains a factual observation. This body adds a bounded interpretation without inventing evidence.","sources":[{"title":"Fixture","url":"https://example.org/observation","retrieved_at":"2026-10-18T20:00:00Z"}],"topics":["technology"],"related_ids":[],"confidence_rationale":"One deterministic fixture source supports the bounded observation."}`)
 	case "canary":
 		workingDirectory, _ := os.Getwd()
 		value, _ := json.Marshal(map[string]any{
