@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/editorial"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,7 +23,18 @@ type Config struct {
 	PublicBranch    string        `yaml:"public_branch"`
 	PublicRemote    string        `yaml:"public_remote"`
 	Budget          Budget        `yaml:"budget"`
+	Editorial       Editorial     `yaml:"editorial"`
 	DryRun          bool          `yaml:"dry_run"`
+}
+
+type Editorial struct {
+	Mode               string         `yaml:"-"`
+	Weights            map[string]int `yaml:"weights"`
+	HistoryLimit       int            `yaml:"history_limit"`
+	ModeRepeatWindow   int            `yaml:"mode_repeat_window"`
+	TopicRepeatWindow  int            `yaml:"topic_repeat_window"`
+	ModeRepeatPenalty  float64        `yaml:"mode_repeat_penalty"`
+	TopicRepeatPenalty float64        `yaml:"topic_repeat_penalty"`
 }
 
 type Budget struct {
@@ -50,7 +62,24 @@ func Default() Config {
 			DailyOutputTokens:     40000,
 			MaxAttempts:           3,
 		},
-		DryRun: true,
+		Editorial: DefaultEditorial(),
+		DryRun:    true,
+	}
+}
+
+func DefaultEditorial() Editorial {
+	weights := make(map[string]int, 15)
+	for _, mode := range editorial.RegularModes() {
+		weights[string(mode.ID)] = 1
+	}
+	return Editorial{
+		Mode:               string(editorial.Random),
+		Weights:            weights,
+		HistoryLimit:       200,
+		ModeRepeatWindow:   3,
+		TopicRepeatWindow:  5,
+		ModeRepeatPenalty:  0.5,
+		TopicRepeatPenalty: 0.5,
 	}
 }
 
@@ -111,7 +140,7 @@ func Load(path string) (Config, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 
-	var cfg Config
+	cfg := Default()
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode configuration: %w", err)
 	}

@@ -40,8 +40,10 @@ func TestRunDispatchesSupportedCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
+	selectedMode := ""
 	factory := func(_ context.Context, cfg config.Config, _ sources.Configuration) (supervisor.Cycle, func() error, error) {
 		called = true
+		selectedMode = cfg.Editorial.Mode
 		return supervisor.Cycle{DryRun: cfg.DryRun, Poll: func(context.Context) []error { return nil }}, func() error { return nil }, nil
 	}
 	var stdout, stderr bytes.Buffer
@@ -51,6 +53,9 @@ func TestRunDispatchesSupportedCommands(t *testing.T) {
 	if !called {
 		t.Fatal("once did not construct the supervisor cycle")
 	}
+	if selectedMode != "random" {
+		t.Fatalf("default editorial mode = %q, want random", selectedMode)
+	}
 	if !strings.Contains(stdout.String(), "once complete") {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
@@ -58,6 +63,16 @@ func TestRunDispatchesSupportedCommands(t *testing.T) {
 		if !strings.Contains(stdout.String(), milestone) {
 			t.Errorf("stdout missing progress milestone %q: %s", milestone, stdout.String())
 		}
+	}
+	called = false
+	selectedMode = ""
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithFactory([]string{"once", "--editorial-mode=philosophy", "--config", configPath}, &stdout, &stderr, factory); code != 0 {
+		t.Fatalf("explicit mode once exit=%d stderr=%s", code, stderr.String())
+	}
+	if selectedMode != "philosophy" {
+		t.Fatalf("explicit editorial mode = %q, want philosophy", selectedMode)
 	}
 }
 
@@ -70,6 +85,26 @@ func TestRunHelpListsEverySubcommand(t *testing.T) {
 	for _, command := range []string{"run", "once", "validate-config", "status", "backup", "reconcile-public", "divergence"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("help output %q does not mention %q", stdout.String(), command)
+		}
+	}
+}
+
+func TestRunListsSupportedEditorialModesWithoutStartingSupervisor(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	started := false
+	factory := func(context.Context, config.Config, sources.Configuration) (supervisor.Cycle, func() error, error) {
+		started = true
+		return supervisor.Cycle{}, func() error { return nil }, nil
+	}
+	if code := runWithFactory([]string{"--list-editorial-modes"}, &stdout, &stderr, factory); code != 0 {
+		t.Fatalf("list modes exit=%d stderr=%q", code, stderr.String())
+	}
+	if started {
+		t.Fatal("listing editorial modes started the daemon")
+	}
+	for _, mode := range []string{"random", "sources", "philosophy", "deep-dive", "connections", "questions", "predictions", "retrospective", "critique", "discovery", "historical-context", "thought-experiment", "explainer", "follow-up", "self-review", "corrections"} {
+		if !strings.Contains(stdout.String(), mode) {
+			t.Errorf("mode listing omitted %q: %s", mode, stdout.String())
 		}
 	}
 }

@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/config"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/editorial"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/operations"
@@ -41,6 +43,11 @@ Commands:
   backup           create a verified online SQLite backup
   reconcile-public rebuild publication acknowledgements from remote Git history
   divergence       report local versus remote publication discrepancies
+
+With no command, run the daemon using --editorial-mode=random by default.
+Editorial options for run and once:
+  --editorial-mode=<mode>  choose a mode for each cycle (random) or pin one mode
+  --list-editorial-modes   list every supported mode and description
 `
 
 func main() {
@@ -52,27 +59,101 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWithFactory(args []string, stdout, stderr io.Writer, factory supervisorFactory) int {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+	command, args, listModes, err := normalizeInvocation(args)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if listModes {
+		writeEditorialModes(stdout)
+		return 0
+	}
+	argsForCommand := args
+	if command != "run" && command != "once" {
+		argsForCommand = args
+	}
+	if command == "--help" || command == "-h" {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
 
-	switch args[0] {
+	switch command {
 	case "validate-config":
-		return runValidateConfig(args[1:], stdout, stderr)
+		return runValidateConfig(argsForCommand, stdout, stderr)
 	case "run", "once":
-		return runSupervisorWithFactory(args[0], args[1:], stdout, stderr, factory)
+		return runSupervisorWithFactory(command, argsForCommand, stdout, stderr, factory)
 	case "status":
-		return runStatus(args[1:], stdout, stderr)
+		return runStatus(argsForCommand, stdout, stderr)
 	case "backup":
-		return runBackup(args[1:], stdout, stderr)
+		return runBackup(argsForCommand, stdout, stderr)
 	case "reconcile-public":
-		return runReconcilePublicWithOpener(args[1:], stdout, stderr, openConfiguredRepository)
+		return runReconcilePublicWithOpener(argsForCommand, stdout, stderr, openConfiguredRepository)
 	case "divergence":
-		return runDivergenceWithOpener(args[1:], stdout, stderr, openConfiguredRepository)
+		return runDivergenceWithOpener(argsForCommand, stdout, stderr, openConfiguredRepository)
 	default:
-		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
+		fmt.Fprintf(stderr, "unknown command %q\n\n%s", command, usage)
 		return 2
+	}
+}
+
+func normalizeInvocation(args []string) (command string, commandArgs []string, listModes bool, err error) {
+	if len(args) == 0 {
+		return "run", nil, false, nil
+	}
+	if args[0] == "--list-editorial-modes" {
+		if len(args) != 1 {
+			return "", nil, false, errors.New("--list-editorial-modes does not accept additional arguments")
+		}
+		return "", nil, true, nil
+	}
+	command = args[0]
+	known := map[string]bool{"run": true, "once": true, "validate-config": true, "status": true, "backup": true, "reconcile-public": true, "divergence": true}
+	if !known[command] && (strings.HasPrefix(command, "--editorial-mode=") || command == "--editorial-mode" || command == "--config") {
+		command = "run"
+		commandArgs = args
+	} else if known[command] || command == "--help" || command == "-h" {
+		commandArgs = args[1:]
+	} else {
+		commandArgs = args[1:]
+	}
+	if _, _, err := parseEditorialModeFlag(commandArgs); err != nil {
+		return "", nil, false, err
+	}
+	return command, commandArgs, false, nil
+}
+
+func parseEditorialModeFlag(args []string) (string, bool, error) {
+	mode := ""
+	for index := 0; index < len(args); index++ {
+		var value string
+		switch {
+		case strings.HasPrefix(args[index], "--editorial-mode="):
+			value = strings.TrimPrefix(args[index], "--editorial-mode=")
+		case args[index] == "--editorial-mode":
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+				return "", false, errors.New("--editorial-mode requires a value")
+			}
+			index++
+			value = args[index]
+		default:
+			continue
+		}
+		if mode != "" {
+			return "", false, errors.New("--editorial-mode may be specified only once")
+		}
+		if _, ok := editorial.Lookup(value); !ok {
+			return "", false, fmt.Errorf("invalid editorial mode %q; valid modes: %s", value, strings.Join(editorial.ValidIDs(), ", "))
+		}
+		mode = value
+	}
+	return mode, mode != "", nil
+}
+
+func writeEditorialModes(writer io.Writer) {
+	fmt.Fprintln(writer, "Supported editorial modes:")
+	for _, id := range editorial.IDs() {
+		mode, _ := editorial.Lookup(id)
+		fmt.Fprintf(writer, "  %-20s %s\n", id, mode.Description)
 	}
 }
 
@@ -242,15 +323,18 @@ func runSupervisor(command string, args []string, stdout, stderr io.Writer) int 
 }
 
 func runSupervisorWithFactory(command string, args []string, stdout, stderr io.Writer, factory supervisorFactory) int {
-	path, ok := configPath(args)
-	if !ok {
-		fmt.Fprintln(stderr, "usage: themachinewrites "+command+" [--config PATH]")
+	options, err := parseSupervisorOptions(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid %s arguments: %v\nusage: themachinewrites %s [--config PATH] [--editorial-mode=<mode>]\n", command, err, command)
 		return 2
 	}
-	cfg, err := config.LoadEnvy(path, os.Getenv)
+	cfg, err := config.LoadEnvy(options.configPath, os.Getenv)
 	if err != nil {
 		logging.New(stderr).Error("supervisor configuration failed", "event", "supervisor.config", "error", err)
 		return 1
+	}
+	if options.modeExplicit {
+		cfg.Editorial.Mode = options.mode
 	}
 	if command == "once" {
 		fmt.Fprintln(stdout, "once: configuration loaded")
@@ -290,6 +374,45 @@ func runSupervisorWithFactory(command string, args []string, stdout, stderr io.W
 		return 1
 	}
 	return 0
+}
+
+type supervisorOptions struct {
+	configPath   string
+	mode         string
+	modeExplicit bool
+}
+
+func parseSupervisorOptions(args []string) (supervisorOptions, error) {
+	options := supervisorOptions{configPath: "config.yaml"}
+	var err error
+	options.mode, options.modeExplicit, err = parseEditorialModeFlag(args)
+	if err != nil {
+		return supervisorOptions{}, err
+	}
+	for index := 0; index < len(args); index++ {
+		switch {
+		case args[index] == "--config":
+			if index+1 >= len(args) || args[index+1] == "" || strings.HasPrefix(args[index+1], "--") {
+				return supervisorOptions{}, errors.New("--config requires a path")
+			}
+			options.configPath = args[index+1]
+			index++
+		case strings.HasPrefix(args[index], "--config="):
+			options.configPath = strings.TrimPrefix(args[index], "--config=")
+			if options.configPath == "" {
+				return supervisorOptions{}, errors.New("--config requires a path")
+			}
+		case strings.HasPrefix(args[index], "--editorial-mode="):
+			continue
+		case args[index] == "--editorial-mode":
+			index++
+		case strings.HasPrefix(args[index], "-"):
+			return supervisorOptions{}, fmt.Errorf("unknown option %q", args[index])
+		default:
+			return supervisorOptions{}, fmt.Errorf("unexpected argument %q", args[index])
+		}
+	}
+	return options, nil
 }
 
 func enabledCount(configuration sources.Configuration) int {

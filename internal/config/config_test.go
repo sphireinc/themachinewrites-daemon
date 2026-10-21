@@ -62,7 +62,8 @@ dry_run: true
 			DailyOutputTokens:     24000,
 			MaxAttempts:           3,
 		},
-		DryRun: true,
+		Editorial: DefaultEditorial(),
+		DryRun:    true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() = %#v, want %#v", got, want)
@@ -192,7 +193,8 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 			DailyOutputTokens:     20000,
 			MaxAttempts:           3,
 		},
-		DryRun: true,
+		Editorial: DefaultEditorial(),
+		DryRun:    true,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid configuration error = %v", err)
