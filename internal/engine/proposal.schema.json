@@ -2,17 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://themachinewrites.com/internal/codex-proposal.schema.json",
   "title": "The Machine Writes Codex proposal",
+  "description": "Choose one action. For defer or investigate, set title, type, body, sources, topics, related_ids, correction_of and confidence_rationale to null; explain the decision only in reason. requested_ids may identify supplied prior posts for investigation, otherwise null. For publish, populate the publication fields.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["action", "reason"],
+  "required": ["action", "reason", "title", "type", "body", "sources", "topics", "related_ids", "requested_ids", "correction_of", "confidence_rationale"],
   "properties": {
-    "action": { "enum": ["publish", "defer", "investigate"] },
+    "action": { "type": "string", "enum": ["publish", "defer", "investigate"] },
     "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
-    "title": { "type": "string", "minLength": 5, "maxLength": 160 },
-    "type": { "enum": ["observation", "analysis", "question", "prediction", "reflection", "correction"] },
-    "body": { "type": "string", "minLength": 1, "maxLength": 20000 },
+    "title": { "type": ["string", "null"], "minLength": 5, "maxLength": 160 },
+    "type": { "type": ["string", "null"], "enum": ["observation", "analysis", "question", "prediction", "reflection", "correction", null] },
+    "body": { "type": ["string", "null"], "minLength": 1, "maxLength": 20000 },
     "sources": {
-      "type": "array",
+      "type": ["array", "null"],
       "minItems": 1,
       "maxItems": 20,
       "items": {
@@ -21,41 +22,28 @@
         "required": ["title", "url", "retrieved_at"],
         "properties": {
           "title": { "type": "string", "minLength": 1, "maxLength": 240 },
-          "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+          "url": { "type": "string", "pattern": "^https?://" },
           "retrieved_at": { "type": "string", "format": "date-time" }
         }
       }
     },
     "topics": {
-      "type": "array",
+      "type": ["array", "null"],
       "minItems": 1,
       "maxItems": 12,
-      "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 48 }
     },
     "related_ids": {
-      "type": "array",
+      "type": ["array", "null"],
       "maxItems": 50,
-      "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" }
     },
     "requested_ids": {
-      "type": "array",
+      "type": ["array", "null"],
       "maxItems": 50,
-      "uniqueItems": true,
       "items": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" }
     },
-    "correction_of": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
-    "confidence_rationale": { "type": "string", "minLength": 1, "maxLength": 2000 }
-  },
-  "allOf": [
-    {
-      "if": { "properties": { "action": { "const": "publish" } }, "required": ["action"] },
-      "then": { "required": ["title", "type", "body", "sources", "topics", "confidence_rationale"] }
-    },
-    {
-      "if": { "properties": { "action": { "enum": ["defer", "investigate"] } }, "required": ["action"] },
-      "then": { "not": { "anyOf": [{ "required": ["title"] }, { "required": ["body"] }, { "required": ["sources"] }] } }
-    }
-  ]
+    "correction_of": { "type": ["string", "null"], "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" },
+    "confidence_rationale": { "type": ["string", "null"], "minLength": 1, "maxLength": 2000 }
+  }
 }

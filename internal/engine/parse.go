@@ -54,6 +54,15 @@ func validateProposal(proposal Proposal) error {
 	if len(proposal.Reason) < 1 || len(proposal.Reason) > 1000 {
 		return errors.New("reason must contain 1–1000 characters")
 	}
+	if hasDuplicates(proposal.Topics) {
+		return errors.New("topics must be unique")
+	}
+	if hasDuplicates(proposal.RelatedIDs) {
+		return errors.New("related_ids must be unique")
+	}
+	if hasDuplicates(proposal.RequestedIDs) {
+		return errors.New("requested_ids must be unique")
+	}
 	switch proposal.Action {
 	case ActionDefer, ActionInvestigate:
 		if proposal.Title != "" || proposal.Body != "" || len(proposal.Sources) != 0 {
@@ -102,6 +111,17 @@ func validateProposal(proposal Proposal) error {
 		}
 	}
 	return nil
+}
+
+func hasDuplicates(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			return true
+		}
+		seen[value] = struct{}{}
+	}
+	return false
 }
 
 func validCorrectionID(id string) bool {

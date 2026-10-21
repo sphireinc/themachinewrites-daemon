@@ -25,6 +25,11 @@ systemd's private `StateDirectory`, and exposes no listen port.
    Install `deploy/systemd/themachinewrites.service` under
    `/etc/systemd/system/themachinewrites.service`.
 
+   Place the configured dedicated `CODEX_HOME` outside denied-read paths, where the service
+   identity and systemd filesystem policy allow access. Before starting systemd, authenticate
+   it as the `themachinewrites` service identity and verify it with `codex login status`. Follow
+   [Codex login and dry-run setup](CODEX-COMPATIBILITY.md#dedicated-codex-home-login-and-dry-run).
+
 4. Create `/etc/themachinewrites/daemon.env` with mode `0600`, owner root, containing placeholder
    values replaced by an authorized operator:
 
