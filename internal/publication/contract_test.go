@@ -57,6 +57,34 @@ func TestRenderedMarkdownMatchesV1Contract(t *testing.T) {
 	}
 }
 
+func TestNonfactualReflectionRendersWithoutSourcesAndRetainsIndependentModeAndTopic(t *testing.T) {
+	proposal := validProposal()
+	proposal.EditorialMode = "philosophy"
+	proposal.PrimaryTopic = "identity"
+	proposal.Topics = []string{"identity", "artificial-intelligence"}
+	proposal.Factuality = "nonfactual_reflection"
+	proposal.Sources = nil
+	post, err := Render(proposal, RenderInput{ID: "01M589K0G0A46YFKY4RCSP5JX3", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC), ModelIdentifier: "test-model", PromptVersion: "sha256:prompt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontmatter := strings.SplitN(string(post.Markdown), "---", 3)[1]
+	var metadata map[string]any
+	if err := yaml.Unmarshal([]byte(frontmatter), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := jsonObject(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePinnedPostSchema(normalized); err != nil {
+		t.Fatalf("source-free reflective post violates contract: %v", err)
+	}
+	if metadata["editorial_mode"] != "philosophy" || metadata["primary_topic"] != "identity" {
+		t.Fatalf("mode/topic metadata conflated: %#v", metadata)
+	}
+}
+
 func jsonObject(value map[string]any) (map[string]any, error) {
 	content, err := json.Marshal(value)
 	if err != nil {

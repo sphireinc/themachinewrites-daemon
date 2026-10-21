@@ -46,6 +46,20 @@ func Load() (Bundle, error) {
 	return Bundle{Version: version, Text: strings.Join(sections, "\n\n") + "\n"}, nil
 }
 
+// VersionForMode binds a cycle's exact trusted editorial instructions to its
+// prompt identity while preserving the shared prompt bundle version.
+func VersionForMode(bundle Bundle, mode, instructions string) (string, error) {
+	if strings.TrimSpace(mode) == "" || strings.TrimSpace(instructions) == "" {
+		return "", errors.New("editorial mode and instructions are required")
+	}
+	assets := map[string][]byte{
+		"base-version":           []byte(bundle.Version),
+		"editorial-mode":         []byte(mode),
+		"editorial-instructions": []byte(instructions),
+	}
+	return versionAssets(assets)
+}
+
 func versionAssets(assets map[string][]byte) (string, error) {
 	if len(assets) == 0 {
 		return "", errors.New("no prompt assets provided")

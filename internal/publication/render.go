@@ -14,6 +14,8 @@ type RenderInput struct {
 	ID                 string
 	PublishedAt        time.Time
 	CorrectionOf       string
+	EditorialMode      string
+	PrimaryTopic       string
 	ModelIdentifier    string
 	PromptVersion      string
 	IndependentSources int
@@ -26,8 +28,40 @@ type RenderedPost struct {
 }
 
 func Render(proposal engine.Proposal, input RenderInput) (RenderedPost, error) {
+	if proposal.EditorialMode == "" {
+		proposal.EditorialMode = input.EditorialMode
+		if proposal.EditorialMode == "" {
+			proposal.EditorialMode = "sources"
+		}
+	}
+	if proposal.PrimaryTopic == "" {
+		proposal.PrimaryTopic = input.PrimaryTopic
+		if proposal.PrimaryTopic == "" && len(proposal.Topics) > 0 {
+			proposal.PrimaryTopic = proposal.Topics[0]
+		}
+		if proposal.PrimaryTopic == "" {
+			proposal.Topics = []string{"general"}
+			proposal.PrimaryTopic = "general"
+		}
+	}
+	if proposal.Factuality == "" {
+		if len(proposal.Sources) > 0 {
+			proposal.Factuality = "source_supported"
+		} else {
+			proposal.Factuality = "nonfactual_reflection"
+		}
+	}
 	if err := ValidateProposal(proposal); err != nil {
 		return RenderedPost{}, err
+	}
+	if proposal.EditorialMode == "" || proposal.PrimaryTopic == "" {
+		return RenderedPost{}, errors.New("editorial mode and primary topic are required")
+	}
+	if input.EditorialMode != "" && input.EditorialMode != proposal.EditorialMode {
+		return RenderedPost{}, errors.New("render editorial mode does not match proposal")
+	}
+	if input.PrimaryTopic != "" && input.PrimaryTopic != proposal.PrimaryTopic {
+		return RenderedPost{}, errors.New("render primary topic does not match proposal")
 	}
 	if err := ValidateCitations(proposal); err != nil {
 		return RenderedPost{}, err
@@ -69,12 +103,30 @@ func Render(proposal engine.Proposal, input RenderInput) (RenderedPost, error) {
 	fmt.Fprintf(&builder, "schema_version: 1\nid: %s\ntitle: %s\ntype: %s\npublished_at: %s\n",
 		input.ID, yamlScalar(proposal.Title), proposal.Type, input.PublishedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&builder, "topics: [%s]\n", yamlList(proposal.Topics))
-	builder.WriteString("sources:\n")
-	for _, source := range proposal.Sources {
+	fmt.Fprintf(&builder, "editorial_mode: %s\nprimary_topic: %s\n", proposal.EditorialMode, proposal.PrimaryTopic)
+	fmt.Fprintf(&builder, "factuality: %s\n", proposal.Factuality)
+	if len(proposal.Sources) == 0 {
+		builder.WriteString("sources: []\n")
+	}
+	for index, source := range proposal.Sources {
+		if index == 0 {
+			builder.WriteString("sources:\n")
+		}
 		fmt.Fprintf(&builder, "  - title: %s\n    url: %s\n    retrieved_at: %s\n",
 			yamlScalar(source.Title), source.URL, source.RetrievedAt)
 	}
 	fmt.Fprintf(&builder, "related_ids: [%s]\n", yamlList(proposal.RelatedIDs))
+	if proposal.Prediction != nil {
+		predictionJSON, _ := json.Marshal(proposal.Prediction)
+		fmt.Fprintf(&builder, "prediction: %s\n", string(predictionJSON))
+	} else {
+		builder.WriteString("prediction: null\n")
+	}
+	if proposal.CorrectionError != "" {
+		fmt.Fprintf(&builder, "correction_error: %s\ncorrected_information: %s\n", yamlScalar(proposal.CorrectionError), yamlScalar(proposal.CorrectedInformation))
+	} else {
+		builder.WriteString("correction_error: null\ncorrected_information: null\n")
+	}
 	if input.CorrectionOf == "" {
 		builder.WriteString("correction_of: null\n")
 	} else {

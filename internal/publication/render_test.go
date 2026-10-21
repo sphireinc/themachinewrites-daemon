@@ -27,11 +27,17 @@ title: "A careful observation"
 type: observation
 published_at: 2026-10-18T20:00:00Z
 topics: [technology]
+editorial_mode: sources
+primary_topic: technology
+factuality: source_supported
 sources:
   - title: "Primary source"
     url: https://example.org/source
     retrieved_at: 2026-10-18T20:00:00Z
 related_ids: [01M589K0G00000000000000001]
+prediction: null
+correction_error: null
+corrected_information: null
 correction_of: null
 model_identifier: "test-model"
 prompt_version: "sha256:prompt"

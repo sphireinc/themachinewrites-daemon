@@ -45,6 +45,26 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 	}
 }
 
+func TestCodexExecSeparatesTrustedModeInstructionsFromUntrustedBundle(t *testing.T) {
+	runner := &recordingRunner{result: []byte(`{"action":"defer","reason":"No post is warranted."}`)}
+	root, workspace, tempDir := codexSandboxDirs(t)
+	code := CodexExec{Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		Runner: runner, SandboxRoot: root, TempDir: tempDir, Workspace: workspace}
+	_, err := code.Run(context.Background(), Input{Instructions: "Base policy", EditorialMode: "philosophy", EditorialInstructions: "Explore a question without forcing an answer.", Bundle: "source payload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(runner.input)
+	for _, part := range []string{"Base policy", "SELECTED EDITORIAL MODE: philosophy", "Explore a question without forcing an answer.", "UNTRUSTED SOURCE DATA:", "source payload"} {
+		if !strings.Contains(prompt, part) {
+			t.Errorf("prompt missing %q: %s", part, prompt)
+		}
+	}
+	if strings.Index(prompt, "UNTRUSTED SOURCE DATA:") < strings.Index(prompt, "SELECTED EDITORIAL MODE:") {
+		t.Fatal("untrusted bundle precedes trusted mode instructions")
+	}
+}
+
 func TestCodexExecFailureReportsSafeDiagnosticCategory(t *testing.T) {
 	root, workspace, tempDir := codexSandboxDirs(t)
 	const secret = "token=private-canary"

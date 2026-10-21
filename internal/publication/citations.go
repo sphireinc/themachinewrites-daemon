@@ -14,7 +14,10 @@ import (
 
 func ValidateCitations(proposal engine.Proposal) error {
 	if len(proposal.Sources) == 0 {
-		return errors.New("publish proposal requires at least one source")
+		if proposal.Factuality == "nonfactual_reflection" {
+			return nil
+		}
+		return errors.New("publish proposal requires at least one source unless explicitly nonfactual")
 	}
 	seen := make(map[string]struct{}, len(proposal.Sources))
 	for index, source := range proposal.Sources {

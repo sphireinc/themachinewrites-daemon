@@ -117,7 +117,11 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 		return ExecOutput{}, fmt.Errorf("write proposal schema: %w", err)
 	}
 	defer os.Remove(outputPath)
-	prompt := "TRUSTED INSTRUCTIONS:\n" + input.Instructions + "\n\nUNTRUSTED SOURCE DATA:\n" + input.Bundle + "\n"
+	trusted := input.Instructions
+	if input.EditorialMode != "" {
+		trusted += "\n\nSELECTED EDITORIAL MODE: " + input.EditorialMode + "\n" + input.EditorialInstructions
+	}
+	prompt := "TRUSTED INSTRUCTIONS:\n" + trusted + "\n\nUNTRUSTED SOURCE DATA:\n" + input.Bundle + "\n"
 	args := []string{
 		"exec", "--sandbox", c.Sandbox, "--ephemeral", "--json",
 		"--config", `approval_policy="never"`, "--config", `web_search="disabled"`,

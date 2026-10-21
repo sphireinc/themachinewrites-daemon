@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestVersionForModeBindsModeAndInstructions(t *testing.T) {
+	bundle, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	philosophy, err := VersionForMode(bundle, "philosophy", "Explore ideas.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := VersionForMode(bundle, "sources", "Explore ideas.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := VersionForMode(bundle, "philosophy", "Explore different ideas.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if philosophy == bundle.Version || philosophy == other || philosophy == changed {
+		t.Fatal("mode prompt version did not bind its complete trusted instruction set")
+	}
+}
+
 func TestVersionedBundleIsStableAndOrdersAssets(t *testing.T) {
 	first, err := Load()
 	if err != nil {

@@ -15,4 +15,27 @@ budget:
   daily_input_tokens: 120000
   daily_output_tokens: 24000
   max_attempts: 3
+editorial:
+  # The executable defaults to random. CLI selection accepts all registry IDs,
+  # including corrections; corrections are never part of these random weights.
+  weights:
+    sources: 1
+    philosophy: 1
+    deep-dive: 1
+    connections: 1
+    questions: 1
+    predictions: 1
+    retrospective: 1
+    critique: 1
+    discovery: 1
+    historical-context: 1
+    thought-experiment: 1
+    explainer: 1
+    follow-up: 1
+    self-review: 1
+  history_limit: 200
+  mode_repeat_window: 3
+  topic_repeat_window: 5
+  mode_repeat_penalty: 0.5
+  topic_repeat_penalty: 0.5
 dry_run: true

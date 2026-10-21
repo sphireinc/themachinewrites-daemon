@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,18 +22,25 @@ type Corpus struct {
 }
 
 type PostRecord struct {
-	ID              string
-	Title           string
-	Type            string
-	PublishedAt     time.Time
-	Topics          []string
-	RelatedIDs      []string
-	CorrectionOf    string
-	Body            string
-	Path            string
-	Markdown        []byte
-	ModelIdentifier string
-	PromptVersion   string
+	ID                   string
+	Title                string
+	Type                 string
+	PublishedAt          time.Time
+	Topics               []string
+	EditorialMode        string
+	PrimaryTopic         string
+	Factuality           string
+	Sources              []engine.Source
+	RelatedIDs           []string
+	CorrectionOf         string
+	CorrectionError      string
+	CorrectedInformation string
+	Prediction           *engine.Prediction
+	Body                 string
+	Path                 string
+	Markdown             []byte
+	ModelIdentifier      string
+	PromptVersion        string
 }
 
 var ulidPattern = regexp.MustCompile(`^[0-7][0-9A-HJKMNP-TV-Z]{25}$`)
@@ -87,16 +95,23 @@ func parseCanonicalPost(root, path string) (PostRecord, error) {
 	}
 	end += 4
 	var metadata struct {
-		SchemaVersion   int      `yaml:"schema_version"`
-		ID              string   `yaml:"id"`
-		Title           string   `yaml:"title"`
-		Type            string   `yaml:"type"`
-		PublishedAt     string   `yaml:"published_at"`
-		Topics          []string `yaml:"topics"`
-		RelatedIDs      []string `yaml:"related_ids"`
-		CorrectionOf    *string  `yaml:"correction_of"`
-		ModelIdentifier string   `yaml:"model_identifier"`
-		PromptVersion   string   `yaml:"prompt_version"`
+		SchemaVersion        int                `yaml:"schema_version"`
+		ID                   string             `yaml:"id"`
+		Title                string             `yaml:"title"`
+		Type                 string             `yaml:"type"`
+		PublishedAt          string             `yaml:"published_at"`
+		Topics               []string           `yaml:"topics"`
+		EditorialMode        string             `yaml:"editorial_mode"`
+		PrimaryTopic         string             `yaml:"primary_topic"`
+		Factuality           string             `yaml:"factuality"`
+		Sources              []engine.Source    `yaml:"sources"`
+		RelatedIDs           []string           `yaml:"related_ids"`
+		CorrectionOf         *string            `yaml:"correction_of"`
+		CorrectionError      string             `yaml:"correction_error"`
+		CorrectedInformation string             `yaml:"corrected_information"`
+		Prediction           *engine.Prediction `yaml:"prediction"`
+		ModelIdentifier      string             `yaml:"model_identifier"`
+		PromptVersion        string             `yaml:"prompt_version"`
 	}
 	if err := yaml.Unmarshal(content[4:end], &metadata); err != nil {
 		return PostRecord{}, fmt.Errorf("post %s: %w", path, err)
@@ -129,7 +144,9 @@ func parseCanonicalPost(root, path string) (PostRecord, error) {
 	}
 	return PostRecord{
 		ID: metadata.ID, Title: metadata.Title, Type: metadata.Type, PublishedAt: publishedAt.UTC(),
-		Topics: metadata.Topics, RelatedIDs: metadata.RelatedIDs, CorrectionOf: correction,
+		Topics: metadata.Topics, EditorialMode: metadata.EditorialMode, PrimaryTopic: metadata.PrimaryTopic,
+		Factuality: metadata.Factuality, Sources: metadata.Sources, RelatedIDs: metadata.RelatedIDs, CorrectionOf: correction,
+		CorrectionError: metadata.CorrectionError, CorrectedInformation: metadata.CorrectedInformation, Prediction: metadata.Prediction,
 		Body: body, Path: canonical, Markdown: content, ModelIdentifier: metadata.ModelIdentifier,
 		PromptVersion: metadata.PromptVersion,
 	}, nil

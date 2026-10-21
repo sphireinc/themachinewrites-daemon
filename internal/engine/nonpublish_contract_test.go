@@ -31,6 +31,8 @@ func TestNonpublishStructuredOutputContract(t *testing.T) {
 				"title": nil, "type": nil, "body": nil, "sources": nil,
 				"topics": nil, "related_ids": nil, "requested_ids": nil,
 				"correction_of": nil, "confidence_rationale": nil,
+				"editorial_mode": nil, "primary_topic": nil, "factuality": nil,
+				"correction_error": nil, "corrected_information": nil, "prediction": nil,
 			}
 			if action == ActionInvestigate {
 				response["requested_ids"] = []any{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}

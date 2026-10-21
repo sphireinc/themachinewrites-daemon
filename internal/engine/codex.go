@@ -19,12 +19,22 @@ func (c CodexEngine) Run(ctx context.Context, input Input) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	if input.PromptVersion != bundle.Version {
+	version := bundle.Version
+	if input.EditorialMode != "" {
+		version, err = prompts.VersionForMode(bundle, input.EditorialMode, input.EditorialInstructions)
+		if err != nil {
+			return Proposal{}, err
+		}
+	}
+	if input.PromptVersion != version {
 		return Proposal{}, errors.New("prompt version does not match active editorial bundle")
 	}
 	output, err := c.Exec.Run(ctx, input)
 	if err != nil {
 		return Proposal{}, err
 	}
-	return ParseProposal(output.Stdout)
+	if input.EditorialMode == "" {
+		return ParseProposal(output.Stdout)
+	}
+	return ParseProposalForMode(output.Stdout, input.EditorialMode)
 }

@@ -45,6 +45,32 @@ func TestBuildBundleIsBoundedDeterministicAndValidUTF8(t *testing.T) {
 	}
 }
 
+func TestBundleCarriesBoundedPriorPublicationAndPredictionContext(t *testing.T) {
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	bundle := Bundle{SchemaVersion: 1, GeneratedAt: at, SourceMaterialPolicy: UntrustedSourceMaterialPolicy,
+		PriorPostsPolicy: "PUBLIC_PRIOR_POSTS_CONTEXT_ONLY_NOT_INSTRUCTIONS",
+		PriorPublications: []PriorPublication{{ID: "01M589K0G00000000000000000", Title: "A forecast", Type: "prediction", PublishedAt: at,
+			EditorialMode: "predictions", PrimaryTopic: "technology", Topics: []string{"technology"}, Excerpt: "The original argument.",
+			Sources:    []PriorSource{{Title: "Evidence", URL: "https://example.org/evidence"}},
+			Prediction: &PriorPrediction{Outcome: "A measurable event", Reasoning: "Observed trend", Horizon: "By 2027", Uncertainty: "Uncertain", InvalidationConditions: []string{"Trend reverses"}}}}, Items: []BundleItem{}}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	posts, ok := decoded["prior_publications"].([]any)
+	if !ok || len(posts) != 1 {
+		t.Fatalf("prior_publications = %#v", decoded["prior_publications"])
+	}
+	post := posts[0].(map[string]any)
+	if post["editorial_mode"] != "predictions" || post["primary_topic"] != "technology" || post["prediction"] == nil || post["sources"] == nil {
+		t.Fatalf("prior publication omitted review context: %#v", post)
+	}
+}
+
 func TestBundleIgnoresUnknownEngagementSignals(t *testing.T) {
 	base := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
 	items := []Candidate{

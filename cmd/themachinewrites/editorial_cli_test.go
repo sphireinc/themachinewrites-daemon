@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/editorial"
 )
 
 func TestNormalizeInvocationDefaultsAndPreservesExistingCommands(t *testing.T) {
@@ -26,6 +28,15 @@ func TestNormalizeInvocationDefaultsAndPreservesExistingCommands(t *testing.T) {
 				t.Fatalf("normalizeInvocation(%v) = (%q, %v, %t, %v), want (%q, %v, false, nil)", tt.args, command, args, list, err, tt.wantCommand, tt.wantArgs)
 			}
 		})
+	}
+}
+
+func TestEveryRegisteredEditorialModeIsExplicitlySelectable(t *testing.T) {
+	for _, mode := range editorial.IDs() {
+		_, args, list, err := normalizeInvocation([]string{"--editorial-mode=" + mode})
+		if err != nil || list || len(args) != 1 || args[0] != "--editorial-mode="+mode {
+			t.Errorf("mode %q is not explicitly selectable: args=%v list=%t err=%v", mode, args, list, err)
+		}
 	}
 }
 

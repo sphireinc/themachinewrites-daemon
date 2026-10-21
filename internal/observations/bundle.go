@@ -18,16 +18,45 @@ type BundleLimits struct {
 }
 
 type Bundle struct {
-	SchemaVersion        int             `json:"schema_version"`
-	GeneratedAt          time.Time       `json:"generated_at"`
-	EditorialMode        string          `json:"editorial_mode,omitempty"`
-	EditorialReason      string          `json:"editorial_reason,omitempty"`
-	EligibleModes        []string        `json:"eligible_modes,omitempty"`
-	RecentTopics         []string        `json:"recent_topics,omitempty"`
-	SourceMaterialPolicy string          `json:"source_material_policy"`
-	Memory               json.RawMessage `json:"memory,omitempty"`
-	RevisitPrompt        string          `json:"revisit_prompt,omitempty"`
-	Items                []BundleItem    `json:"items"`
+	SchemaVersion        int                `json:"schema_version"`
+	GeneratedAt          time.Time          `json:"generated_at"`
+	EditorialMode        string             `json:"editorial_mode,omitempty"`
+	EditorialReason      string             `json:"editorial_reason,omitempty"`
+	EligibleModes        []string           `json:"eligible_modes,omitempty"`
+	RecentTopics         []string           `json:"recent_topics,omitempty"`
+	SourceMaterialPolicy string             `json:"source_material_policy"`
+	Memory               json.RawMessage    `json:"memory,omitempty"`
+	RevisitPrompt        string             `json:"revisit_prompt,omitempty"`
+	PriorPostsPolicy     string             `json:"prior_posts_policy,omitempty"`
+	PriorPublications    []PriorPublication `json:"prior_publications,omitempty"`
+	Items                []BundleItem       `json:"items"`
+}
+
+type PriorPublication struct {
+	ID            string           `json:"id"`
+	Title         string           `json:"title"`
+	Type          string           `json:"type"`
+	PublishedAt   time.Time        `json:"published_at"`
+	EditorialMode string           `json:"editorial_mode,omitempty"`
+	PrimaryTopic  string           `json:"primary_topic,omitempty"`
+	Topics        []string         `json:"topics,omitempty"`
+	Excerpt       string           `json:"excerpt"`
+	Sources       []PriorSource    `json:"sources,omitempty"`
+	CorrectionOf  string           `json:"correction_of,omitempty"`
+	Prediction    *PriorPrediction `json:"prediction,omitempty"`
+}
+
+type PriorSource struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type PriorPrediction struct {
+	Outcome                string   `json:"outcome"`
+	Reasoning              string   `json:"reasoning"`
+	Horizon                string   `json:"horizon"`
+	Uncertainty            string   `json:"uncertainty"`
+	InvalidationConditions []string `json:"invalidation_conditions"`
 }
 
 type BundleItem struct {

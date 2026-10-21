@@ -54,3 +54,38 @@ func TestProposalOutputLeavesOutboxUntouchedWhenInvalid(t *testing.T) {
 		t.Fatal("invalid proposal accepted")
 	}
 }
+
+func TestParseProposalForModeAllowsOnlyNonfactualSourceFreeReflections(t *testing.T) {
+	raw := []byte(`{"action":"publish","reason":"A coherent reflection is warranted.","editorial_mode":"philosophy","primary_topic":"identity","factuality":"nonfactual_reflection","title":"A question of identity","type":"reflection","body":"Identity can be understood as continuity in the story a person tells about change. This is a conceptual argument, not a claim about a particular experiment.","sources":[],"topics":["identity","humanity"],"related_ids":[],"requested_ids":[],"correction_of":null,"correction_error":null,"corrected_information":null,"prediction":null,"confidence_rationale":"The argument distinguishes continuity from sameness."}`)
+	proposal, err := ParseProposalForMode(raw, "philosophy")
+	if err != nil {
+		t.Fatalf("source-free philosophy proposal rejected: %v", err)
+	}
+	if proposal.PrimaryTopic != "identity" || proposal.EditorialMode != "philosophy" {
+		t.Fatalf("normalized metadata = %#v", proposal)
+	}
+	if _, err := ParseProposalForMode(raw, "sources"); !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("source-free sources proposal error = %v, want invalid proposal", err)
+	}
+}
+
+func TestParseProposalForModeValidatesModeReferencesAndStructuredPredictions(t *testing.T) {
+	base := `"action":"publish","reason":"Evidence supports this forecast.","editorial_mode":"predictions","primary_topic":"technology","factuality":"source_supported","title":"A bounded forecast","type":"prediction","body":"A forecast with a defined horizon.","sources":[{"title":"Source","url":"https://example.org/source","retrieved_at":"2026-10-18T20:00:00Z"}],"topics":["technology"],"related_ids":[],"requested_ids":[],"correction_of":null,"correction_error":null,"corrected_information":null,"prediction":{"outcome":"The system reaches the stated threshold.","reasoning":"Recent measurements show a sustained trend.","horizon":"By 2027-06-30 or when the threshold is reached.","uncertainty":"This is uncertain because the measurement can shift.","invalidation_conditions":["The next three measurements fall below the baseline."]},"confidence_rationale":"The source supports the direction but not a precise probability."`
+	if _, err := ParseProposalForMode([]byte("{"+base+"}"), "predictions"); err != nil {
+		t.Fatalf("complete prediction rejected: %v", err)
+	}
+	incomplete := strings.Replace(base, `,"invalidation_conditions":["The next three measurements fall below the baseline."]`, `,"invalidation_conditions":[]`, 1)
+	if _, err := ParseProposalForMode([]byte("{"+incomplete+"}"), "predictions"); !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("prediction without invalidation conditions error = %v, want invalid proposal", err)
+	}
+	mismatch := strings.Replace(base, `"editorial_mode":"predictions"`, `"editorial_mode":"philosophy"`, 1)
+	if _, err := ParseProposalForMode([]byte("{"+mismatch+"}"), "predictions"); !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("mode mismatch error = %v, want invalid proposal", err)
+	}
+	followUp := strings.Replace(base, `"editorial_mode":"predictions"`, `"editorial_mode":"follow-up"`, 1)
+	followUp = strings.Replace(followUp, `"type":"prediction"`, `"type":"analysis"`, 1)
+	followUp = strings.Replace(followUp, `,"prediction":{"outcome":"The system reaches the stated threshold.","reasoning":"Recent measurements show a sustained trend.","horizon":"By 2027-06-30 or when the threshold is reached.","uncertainty":"This is uncertain because the measurement can shift.","invalidation_conditions":["The next three measurements fall below the baseline."]}`, `,"prediction":null`, 1)
+	if _, err := ParseProposalForMode([]byte("{"+followUp+"}"), "follow-up"); !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("follow-up without prior-publication references error = %v, want invalid proposal", err)
+	}
+}
