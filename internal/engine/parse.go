@@ -141,10 +141,13 @@ func ValidateProposalForMode(proposal Proposal, selectedMode string) (Proposal, 
 			if mode.Evidence != editorial.ReflectiveEvidence || proposal.Factuality != "nonfactual_reflection" {
 				return Proposal{}, errors.New("source-free publication is allowed only for explicitly nonfactual reflective modes")
 			}
-		} else if proposal.Factuality == "" {
-			proposal.Factuality = "source_supported"
-		} else if proposal.Factuality != "source_supported" && proposal.Factuality != "nonfactual_reflection" {
-			return Proposal{}, errors.New("factuality must be source_supported or nonfactual_reflection")
+		} else {
+			if proposal.Factuality == "" {
+				proposal.Factuality = "source_supported"
+			}
+			if proposal.Factuality != "source_supported" {
+				return Proposal{}, errors.New("a publication with citations must be marked source_supported")
+			}
 		}
 		if proposal.Type == "prediction" {
 			if proposal.Prediction == nil {

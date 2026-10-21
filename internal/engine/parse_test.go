@@ -67,6 +67,10 @@ func TestParseProposalForModeAllowsOnlyNonfactualSourceFreeReflections(t *testin
 	if _, err := ParseProposalForMode(raw, "sources"); !errors.Is(err, ErrInvalidProposal) {
 		t.Fatalf("source-free sources proposal error = %v, want invalid proposal", err)
 	}
+	withCitationButNonfactual := strings.Replace(string(raw), `"sources":[]`, `"sources":[{"title":"A source","url":"https://example.org/source","retrieved_at":"2026-10-18T20:00:00Z"}]`, 1)
+	if _, err := ParseProposalForMode([]byte(withCitationButNonfactual), "philosophy"); !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("cited nonfactual proposal error = %v, want invalid proposal", err)
+	}
 }
 
 func TestParseProposalForModeValidatesModeReferencesAndStructuredPredictions(t *testing.T) {

@@ -261,6 +261,7 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 		Action: engine.ActionPublish, Reason: "fixture", Title: "A mature prediction", Type: "prediction", Body: "A prediction to revisit.",
 		Sources: []engine.Source{{Title: "Fixture", URL: "https://example.org/prediction", RetrievedAt: now.Add(-40 * 24 * time.Hour).Format(time.RFC3339)}},
 		Topics:  []string{"technology"}, RelatedIDs: []string{}, ConfidenceRationale: "fixture",
+		Prediction: &engine.Prediction{Outcome: "A measurable outcome", Reasoning: "The evidence points to a cautious forecast.", Horizon: "Within six months", Uncertainty: "The trend may change.", InvalidationConditions: []string{"The trend reverses."}},
 	}, publication.RenderInput{ID: postID, PublishedAt: postedAt, ModelIdentifier: "fixture", PromptVersion: "p1", IndependentSources: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +274,7 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 	if err := daemon.DecideAndPublish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "active_dispute") || !strings.Contains(capture.input.Bundle, "correction linked") {
+	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "active_dispute") || !strings.Contains(capture.input.Bundle, "correction linked") || !strings.Contains(capture.input.Bundle, "A measurable outcome") {
 		t.Fatalf("bundle omitted matured prediction context: %s", capture.input.Bundle)
 	}
 }

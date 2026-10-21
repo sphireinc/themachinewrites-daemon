@@ -101,9 +101,10 @@
   },
   "allOf": [
     { "if": { "required": ["factuality"], "properties": { "factuality": { "const": "nonfactual_reflection" } } }, "then": { "properties": { "sources": { "type": "array", "maxItems": 0 } } }, "else": { "properties": { "sources": { "type": "array", "minItems": 1 } } } },
-    { "if": { "properties": { "type": { "const": "prediction" } } }, "then": { "properties": { "prediction": { "type": "object" } } }, "else": { "properties": { "prediction": { "type": "null" } } } },
-    { "if": { "properties": { "type": { "const": "correction" } } }, "then": { "properties": { "correction_of": { "$ref": "#/$defs/ulid" }, "correction_error": { "type": "string" }, "corrected_information": { "type": "string" }, "sources": { "type": "array", "minItems": 1 } } }, "else": { "properties": { "correction_error": { "type": "null" }, "corrected_information": { "type": "null" } } }
-  }
+    { "if": { "properties": { "type": { "const": "prediction" } } }, "then": { "properties": { "prediction": { "type": ["object", "null"] } } }, "else": { "properties": { "prediction": { "type": "null" } } } },
+    { "if": { "required": ["editorial_mode", "type"], "properties": { "editorial_mode": { "type": "string" }, "type": { "const": "prediction" } } }, "then": { "required": ["prediction"], "properties": { "prediction": { "type": "object" } } } },
+    { "if": { "properties": { "type": { "const": "correction" } } }, "then": { "properties": { "correction_of": { "$ref": "#/$defs/ulid" }, "correction_error": { "type": "string" }, "corrected_information": { "type": "string" }, "sources": { "type": "array", "minItems": 1 } } }, "else": { "properties": { "correction_error": { "type": "null" }, "corrected_information": { "type": "null" } } } },
+    { "if": { "required": ["editorial_mode", "type"], "properties": { "editorial_mode": { "type": "string" }, "type": { "const": "correction" } } }, "then": { "required": ["correction_of", "correction_error", "corrected_information"] } }
   ],
   "$defs": {
     "ulid": {

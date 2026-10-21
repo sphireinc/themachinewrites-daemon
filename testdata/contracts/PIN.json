@@ -1,7 +1,7 @@
 {
-  "public_repository_revision": "c98e660b65be233af7399695f5c84708a4d026d0",
+  "public_repository_revision": "8db88ee93b9e255f37da260ba1045cd862b57ab2",
   "schemas": {
-    "post.v1.schema.json": "sha256:83c30b6383e8869166bf0b95c71d03e471c1e5a9e09fbaa1b2e6bbadd90acc88",
+    "post.v1.schema.json": "sha256:78f8ad666e3d693e10fef265940f29e298f064817f76997c08aee56c8301b244",
     "latest-feed.v1.schema.json": "sha256:7547cb454abdbbdfe85c247e17ec3722604f5f4a3607432507630b50995d4653"
   },
   "update_procedure": "Copy schemas from the reviewed public revision, update this pin and hashes, run daemon contract tests, then update the website copy in the same cross-repository change."
