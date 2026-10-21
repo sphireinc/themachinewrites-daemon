@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/editorial"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/memory"
@@ -28,25 +30,30 @@ import (
 )
 
 type Runtime struct {
-	Sources         sources.Configuration
-	Fetcher         sources.FeedFetcher
-	Store           *store.Store
-	Engine          engine.Engine
-	Publisher       gitpub.Publisher
-	Outbox          gitpub.Outbox
-	PublicRoot      string
-	HealthPath      string
-	WorkerID        string
-	ModelName       string
-	Now             func() time.Time
-	DryRun          bool
-	Emitter         *telemetry.Emitter
-	Logger          *slog.Logger
-	Metrics         *telemetry.Metrics
-	MaxCandidates   int
-	Budget          *supervisor.Budget
-	MaxOutputTokens int
-	MemoryMaxItems  int
+	Sources               sources.Configuration
+	Fetcher               sources.FeedFetcher
+	Store                 *store.Store
+	Engine                engine.Engine
+	Publisher             gitpub.Publisher
+	Outbox                gitpub.Outbox
+	PublicRoot            string
+	HealthPath            string
+	WorkerID              string
+	ModelName             string
+	Now                   func() time.Time
+	DryRun                bool
+	Emitter               *telemetry.Emitter
+	Logger                *slog.Logger
+	Metrics               *telemetry.Metrics
+	MaxCandidates         int
+	Budget                *supervisor.Budget
+	MaxOutputTokens       int
+	MemoryMaxItems        int
+	EditorialMode         editorial.ID
+	EditorialSettings     editorial.SelectionConfig
+	EditorialHistoryLimit int
+	SourceFreshnessWindow time.Duration
+	RandomBelow           editorial.RandomBelow
 }
 
 func (r Runtime) Poll(ctx context.Context) []error {
@@ -143,7 +150,7 @@ func (a cursorAdapter) RecordSourceFailure(ctx context.Context, sourceID string,
 	return a.runtime.RecordSourceFailure(ctx, sourceID, at, message)
 }
 
-func (r Runtime) DecideAndPublish(ctx context.Context) error {
+func (r Runtime) DecideAndPublish(ctx context.Context) (returnErr error) {
 	if r.Store == nil || r.Engine == nil {
 		return errors.New("daemon decision dependencies are incomplete")
 	}
@@ -153,12 +160,156 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		return err
 	}
 	r.logInfo(ctx, "pending candidates loaded", "event", "decision.candidates", "candidate_count", len(candidates))
-	if len(candidates) == 0 {
-		r.logInfo(ctx, "decision skipped with no pending candidates", "event", "decision.skipped", "reason", "no_pending_candidates")
-		return nil
+	items, err := toObservationCandidates(candidates)
+	if err != nil {
+		return err
 	}
+	corpus, err := publication.LoadCorpus(r.PublicRoot)
+	if err != nil {
+		return err
+	}
+	topics := make([]string, 0)
+	for _, item := range items {
+		if item.Category != "" {
+			topics = append(topics, item.Category)
+		}
+	}
+	retrieved, err := memory.Retrieve(ctx, r.Store, memory.RetrievalOptions{Topics: topics, MaxItems: r.memoryItems(), MaxBytes: 16 * 1024})
+	if err != nil {
+		return err
+	}
+	revisitQueue := buildRevisitQueue(corpus.Posts, items, r.now())
+	availability := r.editorialAvailability(items, corpus.Posts, retrieved.Items, revisitQueue)
+	topicHints := editorialTopicHints(items, corpus.Posts, revisitQueue)
+	eligible := editorial.EligibleCandidates(availability, topicHints)
+	eligibleIDs := make([]string, 0, len(eligible))
+	for _, candidate := range eligible {
+		if candidate.Eligible {
+			eligibleIDs = append(eligibleIDs, string(candidate.Mode.ID))
+		}
+	}
+	requested := r.EditorialMode
+	if requested == "" {
+		// Preserve the pre-registry library behavior for callers that assemble
+		// Runtime directly. The executable always supplies its configured mode,
+		// whose new default is random.
+		requested = editorial.Sources
+	}
+	requestedMode, ok := editorial.Lookup(string(requested))
+	if !ok {
+		return fmt.Errorf("unsupported editorial mode %q", requested)
+	}
+	historyLimit := r.EditorialHistoryLimit
+	if historyLimit < 1 {
+		historyLimit = 200
+	}
+	storedHistory, err := r.Store.RecentEditorialCycles(ctx, historyLimit)
+	if err != nil {
+		return err
+	}
+	history := editorialHistory(storedHistory)
+	selectedAt := r.now().UTC()
+	selected, selectionReason := requestedMode, "explicitly requested"
+	selectedTopics := []string(nil)
+	if requestedMode.ID == editorial.Random {
+		selection, err := editorial.Choose(eligible, r.EditorialSettings, history, r.RandomBelow)
+		if errors.Is(err, editorial.ErrNoEligibleMode) {
+			cycleID, idErr := newEditorialCycleID()
+			if idErr != nil {
+				return idErr
+			}
+			reason := noEligibleReason(eligible, r.EditorialSettings)
+			if err := r.Store.RecordEditorialCycle(ctx, store.EditorialCycle{
+				ID: cycleID, RequestedMode: string(requestedMode.ID), EligibilityReason: reason,
+				EligibleModes: eligibleIDs, Outcome: "no_eligible_mode", SelectedAt: selectedAt, CompletedAt: selectedAt,
+			}); err != nil {
+				return err
+			}
+			if err := r.Store.PruneEditorialCycles(ctx, historyLimit); err != nil {
+				return err
+			}
+			r.logInfo(ctx, "editorial cycle skipped", "event", "decision.mode.unavailable", "requested_mode", requestedMode.ID, "eligible_modes", eligibleIDs, "reason", reason)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		selected = *selection.Mode
+		selectionReason = selection.Reason
+		for _, candidate := range selection.Eligible {
+			if candidate.Mode.ID == selected.ID {
+				selectedTopics = append([]string(nil), candidate.Topics...)
+				break
+			}
+		}
+	} else {
+		isEligible, reason := editorial.CheckEligibility(requestedMode, availability)
+		if !isEligible {
+			cycleID, idErr := newEditorialCycleID()
+			if idErr != nil {
+				return idErr
+			}
+			reason = fmt.Sprintf("requested mode %s %s", requestedMode.ID, reason)
+			if err := r.Store.RecordEditorialCycle(ctx, store.EditorialCycle{
+				ID: cycleID, RequestedMode: string(requestedMode.ID), EligibilityReason: reason,
+				EligibleModes: eligibleIDs, Outcome: "no_eligible_mode", SelectedAt: selectedAt, CompletedAt: selectedAt,
+			}); err != nil {
+				return err
+			}
+			if err := r.Store.PruneEditorialCycles(ctx, historyLimit); err != nil {
+				return err
+			}
+			r.logInfo(ctx, "requested editorial mode is ineligible", "event", "decision.mode.ineligible", "requested_mode", requestedMode.ID, "eligible_modes", eligibleIDs, "reason", reason)
+			return nil
+		}
+		selectionReason = reason
+		for _, candidate := range eligible {
+			if candidate.Mode.ID == requestedMode.ID {
+				selectedTopics = append([]string(nil), candidate.Topics...)
+				break
+			}
+		}
+	}
+	cycleID, err := newEditorialCycleID()
+	if err != nil {
+		return err
+	}
+	selectedCandidateTopics := selectedTopics
+	if len(selectedCandidateTopics) == 0 {
+		for _, candidate := range eligible {
+			if candidate.Mode.ID == selected.ID {
+				selectedCandidateTopics = append([]string(nil), candidate.Topics...)
+				break
+			}
+		}
+	}
+	if err := r.Store.RecordEditorialCycle(ctx, store.EditorialCycle{
+		ID: cycleID, RequestedMode: string(requestedMode.ID), SelectedMode: string(selected.ID),
+		EligibilityReason: selectionReason, EligibleModes: eligibleIDs,
+		Topics: selectedCandidateTopics, SelectedAt: selectedAt,
+	}); err != nil {
+		return err
+	}
+	cycleOutcome := "failed"
+	cyclePublicationID := ""
+	cycleFinished := false
+	defer func() {
+		if cycleFinished {
+			return
+		}
+		finishErr := r.Store.FinishEditorialCycle(context.WithoutCancel(ctx), cycleID, cycleOutcome, cyclePublicationID, r.now())
+		if returnErr == nil && finishErr != nil {
+			returnErr = finishErr
+		}
+	}()
+	if err := r.Store.PruneEditorialCycles(ctx, historyLimit); err != nil {
+		return err
+	}
+	r.logInfo(ctx, "editorial mode selected", "event", "decision.mode.selected", "requested_mode", requestedMode.ID, "editorial_mode", selected.ID, "eligible_modes", eligibleIDs, "reason", selectionReason)
+
 	at := r.now().UTC().Truncate(time.Millisecond)
 	reservations := make([]store.CandidateReservation, 0, len(candidates))
+	fingerprints := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		postID := candidate.DecisionPostID
 		publicationAt := at
@@ -175,54 +326,40 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 			}
 		}
 		reservations = append(reservations, store.CandidateReservation{Fingerprint: candidate.Fingerprint, PostID: postID, At: publicationAt})
+		fingerprints = append(fingerprints, candidate.Fingerprint)
 	}
-	fingerprints := make([]string, 0, len(reservations))
-	for _, reservation := range reservations {
-		fingerprints = append(fingerprints, reservation.Fingerprint)
-	}
-	if err := r.Store.ReserveCandidates(ctx, reservations); err != nil {
-		return err
-	}
-	items, err := toObservationCandidates(candidates)
-	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
-		return err
-	}
-	record, bundle, err := observations.BuildBundle(items, observations.BundleLimits{MaxItems: len(items), MaxBytes: 128 * 1024})
-	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
-		return err
-	}
-	topics := make([]string, 0)
-	for _, item := range items {
-		if item.Category != "" {
-			topics = append(topics, item.Category)
+	if len(reservations) > 0 {
+		if err := r.Store.ReserveCandidates(ctx, reservations); err != nil {
+			return err
 		}
 	}
-	retrieved, err := memory.Retrieve(ctx, r.Store, memory.RetrievalOptions{Topics: topics, MaxItems: r.memoryItems(), MaxBytes: 16 * 1024})
+	markCandidates := func(state string) {
+		if len(fingerprints) > 0 {
+			_ = r.Store.SetCandidateDecision(ctx, fingerprints, state, r.now())
+		}
+	}
+	record, bundle, err := observations.BuildBundle(items, observations.BundleLimits{MaxItems: max(1, len(items)), MaxBytes: 128 * 1024})
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	record.Memory = retrieved.JSON
-	corpus, err := publication.LoadCorpus(r.PublicRoot)
-	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
-		return err
-	}
-	revisitQueue := buildRevisitQueue(corpus.Posts, items, r.now())
+	record.EditorialMode = string(selected.ID)
+	record.EditorialReason = selectionReason
+	record.EligibleModes = eligibleIDs
+	record.RecentTopics = recentlyCoveredTopics(corpus.Posts, 10)
 	if len(revisitQueue) > 0 {
 		payload, _ := json.Marshal(revisitQueue)
 		record.RevisitPrompt = "Review these scheduled revisit opportunities and choose investigate, defer, publish a follow-up analysis/reflection, or publish a correction linked to the original: " + string(payload)
 	}
 	bundle, err = json.Marshal(record)
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	promptBundle, err := prompts.Load()
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	if r.Publisher != nil && r.Outbox != nil && strings.TrimSpace(r.PublicRoot) != "" {
@@ -232,13 +369,13 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		}
 		lease, err := supervisor.AcquireLease(filepath.Join(r.PublicRoot, ".git"), workerID)
 		if err != nil {
-			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+			markCandidates("pending")
 			return err
 		}
 		defer lease.Release()
 	}
 	started := time.Now()
-	r.logInfo(ctx, "Codex decision started", "event", "codex.started", "candidate_count", len(candidates), "bundle_bytes", len(bundle), "dry_run", r.DryRun)
+	r.logInfo(ctx, "Codex decision started", "event", "codex.started", "editorial_mode", selected.ID, "candidate_count", len(candidates), "bundle_bytes", len(bundle), "dry_run", r.DryRun)
 	if r.Emitter != nil {
 		r.Emitter.Emit(ctx, telemetry.EventModelStarted, "", 0)
 	}
@@ -252,7 +389,7 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 			outputTokens = 4000
 		}
 		if err := r.Budget.Reserve(r.now(), inputTokens, outputTokens); err != nil {
-			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+			markCandidates("pending")
 			return err
 		}
 	}
@@ -263,20 +400,23 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	if err != nil {
 		r.logError(ctx, "Codex decision failed", "event", "codex.failed", "duration", decisionDuration, "error", err)
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+		markCandidates("pending")
 		return err
 	}
-	r.logInfo(ctx, "Codex decision completed", "event", "codex.completed", "duration", decisionDuration, "action", decision.Proposal.Action)
+	r.logInfo(ctx, "Codex decision completed", "event", "codex.completed", "duration", decisionDuration, "action", decision.Proposal.Action, "editorial_mode", selected.ID)
 	if err := r.writeHealth(func(health *telemetry.Health) {
 		health.LastModelCall = timePointer(r.now())
 		health.LastErrorKind = ""
 	}); err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+		markCandidates("pending")
 		return err
 	}
 	if decision.ContentCandidate == nil {
-		if err := r.Store.SetCandidateDecision(ctx, fingerprints, "deferred", r.now()); err != nil {
-			return err
+		markCandidates("deferred")
+		if decision.Proposal.Action == engine.ActionInvestigate {
+			cycleOutcome = "investigated"
+		} else {
+			cycleOutcome = "deferred"
 		}
 		if err := r.writeHealth(func(health *telemetry.Health) {
 			health.PausedReason = "insufficient_evidence"
@@ -289,44 +429,57 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		r.logInfo(ctx, "decision deferred", "event", "decision.deferred", "reason_code", "model_defer")
 		return nil
 	}
+	if err := r.Store.UpdateEditorialCycleTopics(ctx, cycleID, decision.ContentCandidate.Topics); err != nil {
+		markCandidates("pending")
+		return err
+	}
 	if r.DryRun {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
-		r.logInfo(ctx, "publication skipped in dry run", "event", "publication.dry_run", "candidate_count", len(fingerprints))
+		markCandidates("pending")
+		cycleOutcome = "dry_run"
+		r.logInfo(ctx, "publication skipped in dry run", "event", "publication.dry_run", "candidate_count", len(fingerprints), "editorial_mode", selected.ID)
 		return nil
 	}
 	if r.Publisher == nil || r.Outbox == nil || strings.TrimSpace(r.PublicRoot) == "" {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return errors.New("daemon publication dependencies are incomplete")
 	}
-	postID := reservations[0].PostID
-	at = reservations[0].At
+	postID := ""
+	if len(reservations) > 0 {
+		postID = reservations[0].PostID
+		at = reservations[0].At
+	} else {
+		postID, err = publication.GenerateID(cycleID, at)
+		if err != nil {
+			return err
+		}
+	}
 	rendered, err := publication.Render(*decision.ContentCandidate, publication.RenderInput{
 		ID: postID, PublishedAt: at, CorrectionOf: decision.ContentCandidate.CorrectionOf,
 		ModelIdentifier: r.ModelName, PromptVersion: promptBundle.Version,
 		IndependentSources: independentSourceCount(items),
 	})
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	if decision.ContentCandidate.CorrectionOf != "" {
 		if err := publication.ValidateCorrectionDraft(corpus.Posts, postID, at, decision.ContentCandidate.CorrectionOf); err != nil {
-			_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+			markCandidates("failed")
 			return err
 		}
 	}
 	if err := publication.WriteRenderedPost(r.PublicRoot, rendered); err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	pending, err := publication.LoadCorpus(r.PublicRoot)
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	feedPaths, err := publication.MaterializeFeeds(r.PublicRoot, pending.Posts, at)
 	if err != nil {
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "failed", r.now())
+		markCandidates("failed")
 		return err
 	}
 	paths := []string{rendered.Path}
@@ -340,10 +493,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	result, err := gitpub.Publish(ctx, r.Publisher, r.Outbox, gitpub.PublishRequest{PostID: postID, Paths: paths, MaxPushAttempts: 3})
 	if err != nil {
 		r.logError(ctx, "publication push failed", "event", "publication.push.failed", "post_id", postID, "error", err)
-		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+		markCandidates("pending")
 		return err
 	}
-	if err := r.Store.SetCandidateDecision(ctx, fingerprints, "published", r.now()); err != nil {
+	cycleOutcome = "published"
+	cyclePublicationID = postID
+	if err := r.Store.SetCandidateDecision(ctx, fingerprints, "published", r.now()); err != nil && len(fingerprints) > 0 {
 		return err
 	}
 	if err := r.writeHealth(func(health *telemetry.Health) {
@@ -384,6 +539,191 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	r.logInfo(ctx, "publication push confirmed", "event", "publication.push.completed", "post_id", postID, "commit_sha", result.CommitSHA)
 	return nil
+}
+
+func (r Runtime) editorialAvailability(items []observations.Candidate, posts []publication.PostRecord, memories []memory.RetrievedMemory, revisits []memory.RevisitSuggestion) editorial.Availability {
+	freshnessWindow := r.SourceFreshnessWindow
+	if freshnessWindow <= 0 {
+		freshnessWindow = 72 * time.Hour
+	}
+	now := r.now()
+	freshSources := 0
+	freshnessTotal := 0.0
+	for _, item := range items {
+		if sourceAge, ok := candidateAge(item.PublishedAt, now); ok && sourceAge <= freshnessWindow {
+			freshSources++
+			factor := 1 - float64(sourceAge)/float64(freshnessWindow)
+			freshnessTotal += max(0.1, factor)
+		}
+	}
+	followUps, unresolved, outstandingPredictions := len(revisits), 0, 0
+	for _, item := range memories {
+		if item.Kind == memory.KindOpenQuestion || item.Kind == memory.KindRevisit {
+			unresolved++
+		}
+	}
+	corrected := make(map[string]bool)
+	for _, post := range posts {
+		if post.CorrectionOf != "" {
+			corrected[post.CorrectionOf] = true
+		}
+	}
+	for _, post := range posts {
+		if post.Type == "prediction" && !corrected[post.ID] {
+			outstandingPredictions++
+		}
+	}
+	followUps += unresolved
+	followUps += len(newSourceFollowUpTargets(items, posts))
+	researchMaterial := len(items) + len(posts) + len(memories)
+	return editorial.Availability{
+		RecentSources: freshSources, ResearchMaterial: researchMaterial,
+		PriorPublications: len(posts), FollowUpTargets: followUps,
+		OutstandingPredictions: outstandingPredictions, UnresolvedInvestigations: unresolved,
+		SourceFreshnessFactor: func() float64 {
+			if freshSources == 0 {
+				return 0
+			}
+			return freshnessTotal / float64(freshSources)
+		}(),
+	}
+}
+
+func candidateAge(publishedAt time.Time, now time.Time) (time.Duration, bool) {
+	age := now.Sub(publishedAt)
+	if age < -5*time.Minute {
+		return 0, false
+	}
+	if age < 0 {
+		age = 0
+	}
+	return age, true
+}
+
+func editorialTopicHints(items []observations.Candidate, posts []publication.PostRecord, revisits []memory.RevisitSuggestion) map[editorial.ID][]string {
+	sources := make([]string, 0)
+	for _, item := range items {
+		if strings.TrimSpace(item.Category) != "" {
+			sources = append(sources, item.Category)
+		}
+	}
+	prior := make([]string, 0)
+	for _, post := range posts {
+		prior = append(prior, post.Topics...)
+	}
+	followUp := make([]string, 0, len(revisits))
+	for _, revisit := range revisits {
+		for _, post := range posts {
+			if post.ID == revisit.PostID {
+				followUp = append(followUp, post.Topics...)
+				break
+			}
+		}
+	}
+	matched := newSourceFollowUpTargets(items, posts)
+	for id := range matched {
+		for _, post := range posts {
+			if post.ID == id {
+				followUp = append(followUp, post.Topics...)
+				break
+			}
+		}
+	}
+	general := append(append([]string(nil), sources...), prior...)
+	hints := make(map[editorial.ID][]string)
+	for _, mode := range editorial.RegularModes() {
+		switch mode.ID {
+		case editorial.Sources, editorial.Discovery, editorial.Predictions:
+			hints[mode.ID] = sources
+		case editorial.Retrospective, editorial.SelfReview:
+			hints[mode.ID] = prior
+		case editorial.FollowUp:
+			hints[mode.ID] = followUp
+		default:
+			hints[mode.ID] = general
+		}
+	}
+	return hints
+}
+
+func newSourceFollowUpTargets(items []observations.Candidate, posts []publication.PostRecord) map[string]bool {
+	newTopics := make(map[string]bool)
+	for _, item := range items {
+		if value := strings.ToLower(strings.TrimSpace(item.Category)); value != "" {
+			newTopics[value] = true
+		}
+	}
+	matched := make(map[string]bool)
+	if len(newTopics) == 0 {
+		return matched
+	}
+	for _, post := range posts {
+		for _, topic := range post.Topics {
+			if newTopics[strings.ToLower(strings.TrimSpace(topic))] {
+				matched[post.ID] = true
+				break
+			}
+		}
+	}
+	return matched
+}
+
+func recentlyCoveredTopics(posts []publication.PostRecord, limit int) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+	countedPosts := 0
+	for _, post := range posts {
+		if countedPosts >= limit {
+			break
+		}
+		countedPosts++
+		for _, topic := range post.Topics {
+			key := strings.ToLower(topic)
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, topic)
+			}
+		}
+	}
+	return result
+}
+
+func editorialHistory(cycles []store.EditorialCycle) []editorial.RecentSelection {
+	result := make([]editorial.RecentSelection, 0, len(cycles))
+	for index := len(cycles) - 1; index >= 0; index-- {
+		cycle := cycles[index]
+		recent := editorial.RecentSelection{Mode: editorial.ID(cycle.SelectedMode)}
+		if cycle.Outcome == "published" {
+			recent.Topics = append([]string(nil), cycle.Topics...)
+		}
+		if recent.Mode != "" {
+			result = append(result, recent)
+		}
+	}
+	return result
+}
+
+func noEligibleReason(candidates []editorial.Candidate, settings editorial.SelectionConfig) string {
+	parts := make([]string, 0, len(candidates)+1)
+	for _, candidate := range candidates {
+		if !candidate.Eligible {
+			parts = append(parts, string(candidate.Mode.ID)+": "+candidate.Reason)
+		} else if settings.Weights[string(candidate.Mode.ID)] <= 0 {
+			parts = append(parts, string(candidate.Mode.ID)+": configured weight is zero")
+		}
+	}
+	if len(parts) == 0 {
+		return "no regular mode has a positive effective weight"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func newEditorialCycleID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate editorial cycle ID: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
 }
 
 func (r Runtime) logInfo(ctx context.Context, message string, args ...any) {

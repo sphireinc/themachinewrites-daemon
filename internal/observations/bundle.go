@@ -20,6 +20,10 @@ type BundleLimits struct {
 type Bundle struct {
 	SchemaVersion        int             `json:"schema_version"`
 	GeneratedAt          time.Time       `json:"generated_at"`
+	EditorialMode        string          `json:"editorial_mode,omitempty"`
+	EditorialReason      string          `json:"editorial_reason,omitempty"`
+	EligibleModes        []string        `json:"eligible_modes,omitempty"`
+	RecentTopics         []string        `json:"recent_topics,omitempty"`
 	SourceMaterialPolicy string          `json:"source_material_policy"`
 	Memory               json.RawMessage `json:"memory,omitempty"`
 	RevisitPrompt        string          `json:"revisit_prompt,omitempty"`
