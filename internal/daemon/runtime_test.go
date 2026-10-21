@@ -103,7 +103,7 @@ func TestRuntimeLogsSafeOnceHotPathMilestones(t *testing.T) {
 	runtime := Runtime{
 		Sources: sources.Configuration{Sources: []sources.Source{{ID: "fixture", Name: "Fixture", Enabled: true, RequestInterval: time.Minute, URL: sourceURL}}},
 		Fetcher: fakeFetcher{}, Store: storeRuntime, Engine: deferEngine{}, PublicRoot: t.TempDir(), DryRun: true,
-		Logger: logging.New(&logs),
+		Logger: logging.New(&logs), Now: func() time.Time { return time.Date(2026, 10, 18, 20, 1, 0, 0, time.UTC) },
 	}
 	if errs := runtime.Poll(ctx); len(errs) != 0 {
 		t.Fatalf("poll errors: %v", errs)
