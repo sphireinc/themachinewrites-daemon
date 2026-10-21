@@ -45,6 +45,39 @@ func TestCodexExecUsesBoundedReadOnlyInvocation(t *testing.T) {
 	}
 }
 
+func TestCodexExecFailureReportsSafeDiagnosticCategory(t *testing.T) {
+	root, workspace, tempDir := codexSandboxDirs(t)
+	const secret = "token=private-canary"
+	runner := &recordingRunner{err: errors.New("exit status 1"), stderr: []byte("401 unauthorized " + secret)}
+	code := CodexExec{
+		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		Runner: runner, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
+	}
+	_, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
+	if err == nil || !strings.Contains(err.Error(), "diagnostic=authentication") {
+		t.Fatalf("Run() error = %v, want safe authentication category", err)
+	}
+	if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "private-canary") || strings.Contains(err.Error(), secret) {
+		t.Fatalf("Run() error disclosed raw Codex stderr: %v", err)
+	}
+}
+
+func TestCodexExecClassifiesNativeSandboxApplyFailure(t *testing.T) {
+	root, workspace, tempDir := codexSandboxDirs(t)
+	runner := &recordingRunner{err: errors.New("exit status 1"), stderr: []byte("sandbox_apply: Operation not permitted")}
+	code := CodexExec{
+		Executable: "codex", Sandbox: "read-only", Timeout: time.Second, MaxOutputBytes: 4096,
+		Runner: runner, SandboxRoot: root, TempDir: tempDir, Workspace: workspace,
+	}
+	_, err := code.Run(context.Background(), Input{Instructions: "instructions", Bundle: "{}"})
+	if err == nil || !strings.Contains(err.Error(), "diagnostic=native_sandbox_apply") {
+		t.Fatalf("Run() error = %v, want native sandbox apply category", err)
+	}
+	if strings.Contains(err.Error(), "Operation not permitted") {
+		t.Fatalf("Run() error disclosed raw Codex stderr: %v", err)
+	}
+}
+
 func TestCodexExecCancelsHungProcess(t *testing.T) {
 	root, workspace, tempDir := codexSandboxDirs(t)
 	exec := CodexExec{
@@ -270,12 +303,13 @@ type recordingRunner struct {
 	env    []string
 	input  []byte
 	result []byte
+	stderr []byte
 	err    error
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ string, args, env []string, stdin []byte) ([]byte, []byte, error) {
 	r.args, r.env, r.input = append([]string(nil), args...), append([]string(nil), env...), append([]byte(nil), stdin...)
-	return r.result, nil, r.err
+	return r.result, r.stderr, r.err
 }
 
 type hangingRunner struct{}

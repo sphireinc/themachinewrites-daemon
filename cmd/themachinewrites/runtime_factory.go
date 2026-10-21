@@ -12,6 +12,7 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/daemon"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/gitpub"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
@@ -62,6 +63,7 @@ func buildSupervisorCycleWith(
 		Sources: sourceConfig, Fetcher: fetcher, Store: runtime, Engine: codexEngine,
 		PublicRoot: cfg.PublicRepoPath, HealthPath: filepath.Join(cfg.RuntimeDir, "health.json"),
 		ModelName: cfg.CodexModel, Now: now, DryRun: cfg.DryRun,
+		Logger:  logging.New(os.Stderr),
 		Metrics: metrics, MaxCandidates: 20, MaxOutputTokens: cfg.Budget.DailyOutputTokens,
 		Budget: supervisor.NewBudget(now(), supervisor.BudgetLimits{
 			Invocations: cfg.Budget.DailyModelInvocations, InputTokens: cfg.Budget.DailyInputTokens,

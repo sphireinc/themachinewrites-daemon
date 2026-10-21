@@ -16,6 +16,11 @@ LaunchAgent starts the service at login and restarts an unsuccessful process aft
 2. Install reviewed `config.yaml` and `sources.yaml` with restrictive permissions. Do not put
    secrets in either file.
 
+   Place the configured dedicated `CODEX_HOME` outside the project root and denied-read paths.
+   Before loading the LaunchAgent, authenticate it as the same macOS user that will run the
+   agent and verify it with `codex login status`. Follow
+   [Codex login and dry-run setup](CODEX-COMPATIBILITY.md#dedicated-codex-home-login-and-dry-run).
+
 3. Make secrets available to launchd through a protected operator-owned wrapper or a dedicated
    service account/keychain policy. Do not paste secrets into the plist. The required environment
    key is `THEMACHINEWRITES_GIT_PUBLISH_TOKEN`; see `SECRETS.md`.

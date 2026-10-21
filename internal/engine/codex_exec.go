@@ -141,13 +141,33 @@ func (c CodexExec) Run(ctx context.Context, input Input) (ExecOutput, error) {
 		if errors.Is(processCtx.Err(), context.DeadlineExceeded) {
 			return ExecOutput{}, context.DeadlineExceeded
 		}
-		return ExecOutput{}, fmt.Errorf("codex exec failed: %w", err)
+		return ExecOutput{}, fmt.Errorf("codex exec failed: %w (diagnostic=%s)", err, classifyCodexFailure(stderr))
 	}
 	lastMessage, readErr := os.ReadFile(outputPath)
 	if readErr == nil && len(bytes.TrimSpace(lastMessage)) > 0 {
 		stdout = lastMessage
 	}
 	return ExecOutput{Stdout: stdout, Stderr: stderr}, nil
+}
+
+func classifyCodexFailure(stderr []byte) string {
+	message := strings.ToLower(string(stderr))
+	switch {
+	case strings.Contains(message, "sandbox_apply"), strings.Contains(message, "failed to apply sandbox"):
+		return "native_sandbox_apply"
+	case strings.Contains(message, "invalid_json_schema"), strings.Contains(message, "json schema"), strings.Contains(message, "schema"):
+		return "structured_output_schema"
+	case strings.Contains(message, "401"), strings.Contains(message, "403"), strings.Contains(message, "unauthorized"), strings.Contains(message, "not logged in"), strings.Contains(message, "authentication"):
+		return "authentication"
+	case strings.Contains(message, "sandbox"), strings.Contains(message, "permission denied"), strings.Contains(message, "operation not permitted"):
+		return "sandbox_or_filesystem"
+	case strings.Contains(message, "429"), strings.Contains(message, "rate limit"), strings.Contains(message, "quota"):
+		return "rate_limit_or_quota"
+	case strings.Contains(message, "resolve"), strings.Contains(message, "dns"), strings.Contains(message, "connection"), strings.Contains(message, "network"):
+		return "network"
+	default:
+		return "unknown"
+	}
 }
 
 func isolatedEnvironment(override, parent []string, home, tempDir string) ([]string, error) {

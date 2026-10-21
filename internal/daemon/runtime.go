@@ -41,6 +41,7 @@ type Runtime struct {
 	Now             func() time.Time
 	DryRun          bool
 	Emitter         *telemetry.Emitter
+	Logger          *slog.Logger
 	Metrics         *telemetry.Metrics
 	MaxCandidates   int
 	Budget          *supervisor.Budget
@@ -53,48 +54,78 @@ func (r Runtime) Poll(ctx context.Context) []error {
 		return []error{errors.New("daemon poll dependencies are incomplete")}
 	}
 	now := r.now()
+	pollStarted := time.Now()
+	r.logInfo(ctx, "source polling started", "event", "source.poll.started", "enabled_sources", enabledSourceCount(r.Sources))
 	var errorsFound []error
+	var observedCount, insertedCount, pollErrorCount int
 	for _, source := range r.Sources.Sources {
 		if !source.Enabled {
 			continue
 		}
 		started := time.Now()
+		r.logInfo(ctx, "source fetch started", "event", "source.fetch.started", "source_id", source.ID)
 		result, err := sources.Poll(ctx, source, r.Fetcher, cursorAdapter{runtime: r.Store}, now)
 		if r.Emitter != nil {
 			r.Emitter.Emit(ctx, telemetry.EventSourcePoll, "", time.Since(started), "source_id", source.ID)
 		}
 		if err != nil {
+			r.logError(ctx, "source feed failed", "event", "source.fetch.failed", "source_id", source.ID, "duration", time.Since(started), "error", err)
+			pollErrorCount++
 			if r.Metrics != nil {
 				r.Metrics.SourceErrored()
+			}
+			var pollErr *sources.PollError
+			if errors.As(err, &pollErr) && pollErr.IsFeedFailureOnly() && ctx.Err() == nil {
+				continue
 			}
 			errorsFound = append(errorsFound, fmt.Errorf("source %s: %w", source.ID, err))
 			continue
 		}
+		observedCount += len(result.Observations)
 		for _, item := range result.Observations {
 			inserted, err := observations.Ingest(ctx, r.Store, observations.Candidate{
 				URL: item.URL, Headline: item.Headline, SourceID: item.SourceID, SourceName: item.SourceName,
 				Category: item.Category, PublishedAt: item.PublishedAt, Excerpt: item.Excerpt, RetrievedAt: item.RetrievedAt,
 			})
 			if err != nil {
+				r.logError(ctx, "candidate ingestion failed", "event", "candidate.ingest.failed", "source_id", source.ID, "error", err)
 				errorsFound = append(errorsFound, err)
+				pollErrorCount++
 				continue
+			}
+			if inserted {
+				insertedCount++
 			}
 			if inserted && r.Emitter != nil {
 				r.Emitter.Emit(ctx, telemetry.EventCandidate, item.GUID, 0, "source_id", source.ID)
 			}
 		}
+		r.logInfo(ctx, "source fetch completed", "event", "source.fetch.completed", "source_id", source.ID, "duration", time.Since(started), "observations", len(result.Observations))
 	}
 	if err := r.writeHealth(func(health *telemetry.Health) {
 		health.LastPoll = timePointer(now)
-		if len(errorsFound) > 0 {
+		if pollErrorCount > 0 {
 			health.LastErrorKind = "source_failure"
 		} else {
 			health.LastErrorKind = ""
 		}
 	}); err != nil {
+		r.logError(ctx, "poll health update failed", "event", "source.poll.health_failed", "error", err)
 		errorsFound = append(errorsFound, err)
+		pollErrorCount++
 	}
+	r.logInfo(ctx, "source polling completed", "event", "source.poll.completed", "duration", time.Since(pollStarted), "observations", observedCount, "candidates_inserted", insertedCount, "errors", pollErrorCount)
 	return errorsFound
+}
+
+func enabledSourceCount(configuration sources.Configuration) int {
+	count := 0
+	for _, source := range configuration.Sources {
+		if source.Enabled {
+			count++
+		}
+	}
+	return count
 }
 
 type cursorAdapter struct{ runtime *store.Store }
@@ -118,9 +149,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	}
 	candidates, err := r.Store.PendingCandidates(ctx, r.maxCandidates())
 	if err != nil {
+		r.logError(ctx, "pending candidate lookup failed", "event", "decision.candidates.failed", "error", err)
 		return err
 	}
+	r.logInfo(ctx, "pending candidates loaded", "event", "decision.candidates", "candidate_count", len(candidates))
 	if len(candidates) == 0 {
+		r.logInfo(ctx, "decision skipped with no pending candidates", "event", "decision.skipped", "reason", "no_pending_candidates")
 		return nil
 	}
 	at := r.now().UTC().Truncate(time.Millisecond)
@@ -204,6 +238,7 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		defer lease.Release()
 	}
 	started := time.Now()
+	r.logInfo(ctx, "Codex decision started", "event", "codex.started", "candidate_count", len(candidates), "bundle_bytes", len(bundle), "dry_run", r.DryRun)
 	if r.Emitter != nil {
 		r.Emitter.Emit(ctx, telemetry.EventModelStarted, "", 0)
 	}
@@ -222,13 +257,16 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		}
 	}
 	decision, err := engine.Decide(ctx, r.Engine, engine.Input{Instructions: promptBundle.Text, Bundle: string(bundle), PromptVersion: promptBundle.Version}, r.PublicRoot)
+	decisionDuration := time.Since(started)
 	if r.Metrics != nil {
 		r.Metrics.ObserveDurationMilliseconds(uint64(time.Since(started).Milliseconds()))
 	}
 	if err != nil {
+		r.logError(ctx, "Codex decision failed", "event", "codex.failed", "duration", decisionDuration, "error", err)
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
 		return err
 	}
+	r.logInfo(ctx, "Codex decision completed", "event", "codex.completed", "duration", decisionDuration, "action", decision.Proposal.Action)
 	if err := r.writeHealth(func(health *telemetry.Health) {
 		health.LastModelCall = timePointer(r.now())
 		health.LastErrorKind = ""
@@ -248,10 +286,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 		if r.Emitter != nil {
 			r.Emitter.Emit(ctx, telemetry.EventModelDeferred, "", time.Since(started), "reason", decision.Proposal.Reason)
 		}
+		r.logInfo(ctx, "decision deferred", "event", "decision.deferred", "reason_code", "model_defer")
 		return nil
 	}
 	if r.DryRun {
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
+		r.logInfo(ctx, "publication skipped in dry run", "event", "publication.dry_run", "candidate_count", len(fingerprints))
 		return nil
 	}
 	if r.Publisher == nil || r.Outbox == nil || strings.TrimSpace(r.PublicRoot) == "" {
@@ -296,8 +336,10 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if r.Emitter != nil {
 		r.Emitter.Emit(ctx, telemetry.EventPostStaged, postID, 0)
 	}
+	r.logInfo(ctx, "publication push started", "event", "publication.push.started", "post_id", postID, "path_count", len(paths))
 	result, err := gitpub.Publish(ctx, r.Publisher, r.Outbox, gitpub.PublishRequest{PostID: postID, Paths: paths, MaxPushAttempts: 3})
 	if err != nil {
+		r.logError(ctx, "publication push failed", "event", "publication.push.failed", "post_id", postID, "error", err)
 		_ = r.Store.SetCandidateDecision(ctx, fingerprints, "pending", r.now())
 		return err
 	}
@@ -340,7 +382,20 @@ func (r Runtime) DecideAndPublish(ctx context.Context) error {
 	if r.Emitter != nil {
 		r.Emitter.Emit(ctx, telemetry.EventPushConfirmed, postID, 0, "commit_sha", result.CommitSHA)
 	}
+	r.logInfo(ctx, "publication push confirmed", "event", "publication.push.completed", "post_id", postID, "commit_sha", result.CommitSHA)
 	return nil
+}
+
+func (r Runtime) logInfo(ctx context.Context, message string, args ...any) {
+	if r.Logger != nil {
+		r.Logger.InfoContext(ctx, message, args...)
+	}
+}
+
+func (r Runtime) logError(ctx context.Context, message string, args ...any) {
+	if r.Logger != nil {
+		r.Logger.ErrorContext(ctx, message, args...)
+	}
 }
 
 func buildRevisitQueue(posts []publication.PostRecord, items []observations.Candidate, now time.Time) []memory.RevisitSuggestion {

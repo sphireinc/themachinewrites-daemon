@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/engine"
+	"github.com/TheMachineWrites/themachinewrites-daemon/internal/logging"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/memory"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
@@ -83,6 +85,42 @@ func TestRuntimePollsIngestsAndDefersInDryRun(t *testing.T) {
 	}
 	if state != "deferred" || headline != "Fixture headline" {
 		t.Fatalf("candidate state/headline = %s/%s", state, headline)
+	}
+}
+
+func TestRuntimeLogsSafeOnceHotPathMilestones(t *testing.T) {
+	ctx := context.Background()
+	storeRuntime, err := store.Open(ctx, filepath.Join(t.TempDir(), "runtime.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeRuntime.Close()
+	sourceURL := &sources.URL{}
+	if err := sourceURL.UnmarshalYAML(textNode("https://example.org/private-feed.xml")); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	runtime := Runtime{
+		Sources: sources.Configuration{Sources: []sources.Source{{ID: "fixture", Name: "Fixture", Enabled: true, RequestInterval: time.Minute, URL: sourceURL}}},
+		Fetcher: fakeFetcher{}, Store: storeRuntime, Engine: deferEngine{}, PublicRoot: t.TempDir(), DryRun: true,
+		Logger: logging.New(&logs),
+	}
+	if errs := runtime.Poll(ctx); len(errs) != 0 {
+		t.Fatalf("poll errors: %v", errs)
+	}
+	if err := runtime.DecideAndPublish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	output := logs.String()
+	for _, event := range []string{"source.poll.started", "source.poll.completed", "decision.candidates", "codex.started", "codex.completed", "decision.deferred"} {
+		if !strings.Contains(output, event) {
+			t.Errorf("logs missing %q: %s", event, output)
+		}
+	}
+	for _, sensitive := range []string{"Fixture headline", "Fixture source excerpt", "private-feed.xml", "No contribution."} {
+		if strings.Contains(output, sensitive) {
+			t.Errorf("logs contain content %q: %s", sensitive, output)
+		}
 	}
 }
 

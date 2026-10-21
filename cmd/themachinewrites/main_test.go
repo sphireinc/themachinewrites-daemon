@@ -54,6 +54,11 @@ func TestRunDispatchesSupportedCommands(t *testing.T) {
 	if !strings.Contains(stdout.String(), "once complete") {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
+	for _, milestone := range []string{"once: configuration loaded", "once: source configuration loaded", "once: starting cycle"} {
+		if !strings.Contains(stdout.String(), milestone) {
+			t.Errorf("stdout missing progress milestone %q: %s", milestone, stdout.String())
+		}
+	}
 }
 
 func TestRunHelpListsEverySubcommand(t *testing.T) {

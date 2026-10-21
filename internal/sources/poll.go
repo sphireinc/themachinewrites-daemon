@@ -30,6 +30,33 @@ type PollResult struct {
 	NotModified  bool
 }
 
+// PollError separates an external feed failure from failures persisting the
+// source cursor or failure state. Feed failures can be logged and skipped;
+// state failures mean polling progress could not be recorded safely.
+type PollError struct {
+	Feed  error
+	State error
+}
+
+func (e *PollError) Error() string {
+	return errors.Join(e.Feed, e.State).Error()
+}
+
+func (e *PollError) Unwrap() []error {
+	var errs []error
+	if e.Feed != nil {
+		errs = append(errs, e.Feed)
+	}
+	if e.State != nil {
+		errs = append(errs, e.State)
+	}
+	return errs
+}
+
+func (e *PollError) IsFeedFailureOnly() bool {
+	return e != nil && e.Feed != nil && e.State == nil
+}
+
 func Poll(ctx context.Context, source Source, fetcher FeedFetcher, cursors CursorStore, now time.Time) (PollResult, error) {
 	if fetcher == nil || cursors == nil || source.URL == nil || source.URL.Parsed() == nil {
 		return PollResult{}, errors.New("source poller is not configured")
@@ -41,7 +68,7 @@ func Poll(ctx context.Context, source Source, fetcher FeedFetcher, cursors Curso
 	fetched, err := fetcher.Fetch(ctx, source.URL.Parsed(), Cursor{ETag: cursor.ETag, LastModified: cursor.LastModified})
 	if err != nil {
 		recordErr := cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
-		return PollResult{}, errors.Join(err, wrapCursorFailure(recordErr))
+		return PollResult{}, &PollError{Feed: fmt.Errorf("fetch feed: %w", err), State: wrapCursorFailure(recordErr)}
 	}
 	if fetched.NotModified {
 		return PollResult{NotModified: true}, nil
@@ -49,7 +76,7 @@ func Poll(ctx context.Context, source Source, fetcher FeedFetcher, cursors Curso
 	observations, err := parseFeed(fetched.Body, source, now)
 	if err != nil {
 		recordErr := cursors.RecordSourceFailure(ctx, source.ID, now, boundedPlainText(err.Error(), 500))
-		return PollResult{}, errors.Join(err, wrapCursorFailure(recordErr))
+		return PollResult{}, &PollError{Feed: err, State: wrapCursorFailure(recordErr)}
 	}
 	if err := cursors.AdvanceSourceCursor(ctx, source.ID, fetched.ETag, fetched.LastModified, now); err != nil {
 		return PollResult{}, err

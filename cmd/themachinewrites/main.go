@@ -252,10 +252,17 @@ func runSupervisorWithFactory(command string, args []string, stdout, stderr io.W
 		logging.New(stderr).Error("supervisor configuration failed", "event", "supervisor.config", "error", err)
 		return 1
 	}
+	if command == "once" {
+		fmt.Fprintln(stdout, "once: configuration loaded")
+	}
 	sourceConfig, err := sources.LoadConfiguration(cfg.SourcesPath)
 	if err != nil {
 		logging.New(stderr).Error("source configuration failed", "event", "supervisor.sources", "error", err)
 		return 1
+	}
+	if command == "once" {
+		fmt.Fprintf(stdout, "once: source configuration loaded (enabled_sources=%d)\n", enabledCount(sourceConfig))
+		fmt.Fprintln(stdout, "once: initializing runtime")
 	}
 	cycle, closeRuntime, err := factory(context.Background(), cfg, sourceConfig)
 	if err != nil {
@@ -267,10 +274,13 @@ func runSupervisorWithFactory(command string, args []string, stdout, stderr io.W
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if command == "once" {
+		fmt.Fprintf(stdout, "once: starting cycle (dry_run=%t)\n", cfg.DryRun)
 		if err := adapter.Once(ctx); err != nil {
+			fmt.Fprintln(stdout, "once: cycle failed; see stderr for stage details")
 			logging.New(stderr).Error("supervisor cycle failed", "event", "supervisor.once", "error", err)
 			return 1
 		}
+		fmt.Fprintln(stdout, "once: cycle completed")
 		fmt.Fprintf(stdout, "once complete (dry_run=%t, enabled_sources=%d)\n", cfg.DryRun, enabledCount(sourceConfig))
 		return 0
 	}

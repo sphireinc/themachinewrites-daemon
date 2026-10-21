@@ -5,6 +5,7 @@ runtime_dir: ./runtime
 codex_executable: codex
 codex_timeout: 8m
 codex_model: codex-configured-model
+# Dedicated existing Codex CLI home outside denied-read paths; authenticate as the daemon OS identity.
 codex_home: /replace/with/dedicated/codex/home
 public_repo_path: /replace/with/absolute/public/repository
 public_branch: main

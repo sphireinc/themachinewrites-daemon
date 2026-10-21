@@ -1,5 +1,7 @@
 # Private local state and working Git clones
 /runtime/
+/config.yaml
+/sources.yaml
 /data/
 /work/
 /clones/
