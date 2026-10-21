@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -91,5 +92,39 @@ func TestParseProposalForModeValidatesModeReferencesAndStructuredPredictions(t *
 	followUp = strings.Replace(followUp, `,"prediction":{"outcome":"The system reaches the stated threshold.","reasoning":"Recent measurements show a sustained trend.","horizon":"By 2027-06-30 or when the threshold is reached.","uncertainty":"This is uncertain because the measurement can shift.","invalidation_conditions":["The next three measurements fall below the baseline."]}`, `,"prediction":null`, 1)
 	if _, err := ParseProposalForMode([]byte("{"+followUp+"}"), "follow-up"); !errors.Is(err, ErrInvalidProposal) {
 		t.Fatalf("follow-up without prior-publication references error = %v, want invalid proposal", err)
+	}
+}
+
+func TestPredictionReviewIsStructuredAndCanAccompanyNonpublication(t *testing.T) {
+	valid := Proposal{
+		Action: ActionInvestigate, Reason: "The forecast deserves another evidence check.",
+		PredictionReviews: []PredictionReview{{PredictionID: "01M589K0G00000000000000000", Result: "unresolved", Assessment: "Available evidence does not yet resolve the forecast.",
+			Sources: []Source{{Title: "New evidence", URL: "https://example.org/evidence", RetrievedAt: "2026-10-21T14:00:00Z"}}}},
+	}
+	raw, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseProposalForMode(raw, "questions")
+	if err != nil || parsed.Action != ActionInvestigate || len(parsed.PredictionReviews) != 1 {
+		t.Fatalf("ParseProposalForMode() = %#v, %v", parsed, err)
+	}
+	for name, mutate := range map[string]func(*Proposal){
+		"unknown result":   func(p *Proposal) { p.PredictionReviews[0].Result = "certain" },
+		"missing evidence": func(p *Proposal) { p.PredictionReviews[0].Sources = nil },
+		"duplicate target": func(p *Proposal) { p.PredictionReviews = append(p.PredictionReviews, p.PredictionReviews[0]) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := valid
+			invalid.PredictionReviews = append([]PredictionReview(nil), valid.PredictionReviews...)
+			mutate(&invalid)
+			raw, err := json.Marshal(invalid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ParseProposalForMode(raw, "questions"); !errors.Is(err, ErrInvalidProposal) {
+				t.Fatalf("ParseProposalForMode() error = %v, want invalid review rejection", err)
+			}
+		})
 	}
 }

@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchemaVersion = 10
+const CurrentSchemaVersion = 11
 
 type Row = sql.Row
 

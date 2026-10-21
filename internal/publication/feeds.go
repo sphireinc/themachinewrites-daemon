@@ -20,6 +20,8 @@ type FeedCard struct {
 	Excerpt        string    `json:"excerpt"`
 	PublishedAt    time.Time `json:"published_at"`
 	Topics         []string  `json:"topics"`
+	EditorialMode  string    `json:"editorial_mode,omitempty"`
+	PrimaryTopic   string    `json:"primary_topic,omitempty"`
 	ReadingMinutes int       `json:"reading_minutes"`
 	RelatedCount   int       `json:"related_count"`
 }
@@ -166,6 +168,7 @@ func cards(posts []PostRecord) []FeedCard {
 		result = append(result, FeedCard{
 			ID: post.ID, Title: post.Title, Type: post.Type, Excerpt: plainExcerpt(post.Body),
 			PublishedAt: post.PublishedAt.UTC(), Topics: append([]string(nil), post.Topics...),
+			EditorialMode: post.EditorialMode, PrimaryTopic: post.PrimaryTopic,
 			ReadingMinutes: max(1, len(strings.Fields(plainText(post.Body)))/220), RelatedCount: len(unique(append(append([]string(nil), post.RelatedIDs...), post.CorrectionOf))),
 		})
 	}

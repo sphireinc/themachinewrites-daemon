@@ -113,6 +113,38 @@ func TestPinnedSchemaRejectsIntentionalIncompatibleMutation(t *testing.T) {
 	}
 }
 
+func TestGeneratedFeedCardsMatchPinnedEditorialMetadataContract(t *testing.T) {
+	schemaFile, pin := readPinnedSchema(t, "latest-feed.v1.schema.json")
+	digest := sha256.Sum256(schemaFile)
+	if pin.Schemas["latest-feed.v1.schema.json"] != "sha256:"+hex.EncodeToString(digest[:]) {
+		t.Fatal("pinned latest-feed schema hash mismatch")
+	}
+	id := "01M589K0G00000000000000000"
+	feed := BuildLatest([]PostRecord{{
+		ID: id, Title: "A philosophical reflection", Type: "reflection", PublishedAt: time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC),
+		Topics: []string{"identity", "ethics"}, EditorialMode: "philosophy", PrimaryTopic: "identity", Body: "A careful reflection.",
+	}}, time.Date(2026, 10, 18, 21, 0, 0, 0, time.UTC))
+	encoded, err := json.Marshal(feed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var instance map[string]any
+	if err := json.Unmarshal(encoded, &instance); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("https://themachinewrites.com/schemas/latest-feed.v1.schema.json", decodeSchema(t, schemaFile)); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("https://themachinewrites.com/schemas/latest-feed.v1.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(instance); err != nil {
+		t.Fatalf("generated feed card violates pinned schema: %v", err)
+	}
+}
+
 type contractPin struct {
 	Revision string            `json:"public_repository_revision"`
 	Schemas  map[string]string `json:"schemas"`

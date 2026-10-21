@@ -52,7 +52,10 @@ func TestBundleCarriesBoundedPriorPublicationAndPredictionContext(t *testing.T) 
 		PriorPublications: []PriorPublication{{ID: "01M589K0G00000000000000000", Title: "A forecast", Type: "prediction", PublishedAt: at,
 			EditorialMode: "predictions", PrimaryTopic: "technology", Topics: []string{"technology"}, Excerpt: "The original argument.",
 			Sources:    []PriorSource{{Title: "Evidence", URL: "https://example.org/evidence"}},
-			Prediction: &PriorPrediction{Outcome: "A measurable event", Reasoning: "Observed trend", Horizon: "By 2027", Uncertainty: "Uncertain", InvalidationConditions: []string{"Trend reverses"}}}}, Items: []BundleItem{}}
+			Prediction: &PriorPrediction{Outcome: "A measurable event", Reasoning: "Observed trend", Horizon: "By 2027", Uncertainty: "Uncertain", InvalidationConditions: []string{"Trend reverses"}}}},
+		PredictionReviewHistory: []PriorPredictionReview{{PredictionID: "01M589K0G00000000000000000", Result: "unresolved", Assessment: "Evidence remains incomplete.",
+			Sources: []PriorSource{{Title: "New evidence", URL: "https://example.org/new-evidence"}}, ReviewedAt: at}},
+		Items: []BundleItem{}}
 	raw, err := json.Marshal(bundle)
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +71,10 @@ func TestBundleCarriesBoundedPriorPublicationAndPredictionContext(t *testing.T) 
 	post := posts[0].(map[string]any)
 	if post["editorial_mode"] != "predictions" || post["primary_topic"] != "technology" || post["prediction"] == nil || post["sources"] == nil {
 		t.Fatalf("prior publication omitted review context: %#v", post)
+	}
+	reviews, ok := decoded["prediction_review_history"].([]any)
+	if !ok || len(reviews) != 1 || reviews[0].(map[string]any)["result"] != "unresolved" {
+		t.Fatalf("prediction_review_history = %#v", decoded["prediction_review_history"])
 	}
 }
 

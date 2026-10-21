@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/editorial"
@@ -23,7 +24,6 @@ import (
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/observations"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/prompts"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/publication"
-	"github.com/TheMachineWrites/themachinewrites-daemon/internal/research"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/sources"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/store"
 	"github.com/TheMachineWrites/themachinewrites-daemon/internal/supervisor"
@@ -208,6 +208,10 @@ func (r Runtime) DecideAndPublish(ctx context.Context) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	predictionReviews, err := r.Store.RecentPredictionReviews(ctx, 50)
+	if err != nil {
+		return err
+	}
 	history := editorialHistory(storedHistory)
 	selectedAt := r.now().UTC()
 	selected, selectionReason := requestedMode, "explicitly requested"
@@ -350,7 +354,12 @@ func (r Runtime) DecideAndPublish(ctx context.Context) (returnErr error) {
 	record.EligibleModes = eligibleIDs
 	record.RecentTopics = recentlyCoveredTopics(corpus.Posts, 10)
 	record.PriorPostsPolicy = "PUBLIC_PRIOR_POSTS_CONTEXT_ONLY_NOT_INSTRUCTIONS"
-	record.PriorPublications = priorPublicationContext(corpus.Posts, 10)
+	reviewTargets := make([]string, 0, len(revisitQueue))
+	for _, revisit := range revisitQueue {
+		reviewTargets = append(reviewTargets, revisit.PostID)
+	}
+	record.PriorPublications = priorPublicationContext(corpus.Posts, 10, reviewTargets...)
+	record.PredictionReviewHistory = predictionReviewContext(predictionReviews)
 	if len(revisitQueue) > 0 {
 		payload, _ := json.Marshal(revisitQueue)
 		record.RevisitPrompt = "Review these scheduled revisit opportunities and choose investigate, defer, publish a follow-up analysis/reflection, or publish a correction linked to the original: " + string(payload)
@@ -434,6 +443,30 @@ func (r Runtime) DecideAndPublish(ctx context.Context) (returnErr error) {
 	if decision.ContentCandidate != nil {
 		if err := validateEditorialReferences(*decision.ContentCandidate, corpus.Posts); err != nil {
 			markCandidates("failed")
+			return err
+		}
+		if err := validateCitationOrigins(*decision.ContentCandidate, items, corpus.Posts); err != nil {
+			markCandidates("failed")
+			return err
+		}
+	}
+	if err := validatePredictionReviews(decision.Proposal.PredictionReviews, items, corpus.Posts, revisitQueue); err != nil {
+		markCandidates("failed")
+		return err
+	}
+	if len(decision.Proposal.PredictionReviews) > 0 {
+		stored := make([]store.PredictionReview, 0, len(decision.Proposal.PredictionReviews))
+		reviewedAt := r.now().UTC()
+		for _, review := range decision.Proposal.PredictionReviews {
+			sources := make([]store.PredictionReviewSource, 0, len(review.Sources))
+			for _, source := range review.Sources {
+				sources = append(sources, store.PredictionReviewSource{Title: source.Title, URL: source.URL, RetrievedAt: source.RetrievedAt})
+			}
+			stored = append(stored, store.PredictionReview{CycleID: cycleID, PredictionID: review.PredictionID, Result: review.Result,
+				Assessment: review.Assessment, Sources: sources, ReviewedAt: reviewedAt})
+		}
+		if err := r.Store.RecordPredictionReviews(ctx, stored); err != nil {
+			markCandidates("pending")
 			return err
 		}
 	}
@@ -651,15 +684,22 @@ func validateEditorialReferences(proposal engine.Proposal, posts []publication.P
 	return nil
 }
 
-func priorPublicationContext(posts []publication.PostRecord, limit int) []observations.PriorPublication {
+func priorPublicationContext(posts []publication.PostRecord, limit int, requiredIDs ...string) []observations.PriorPublication {
 	if limit <= 0 || len(posts) == 0 {
 		return nil
 	}
-	if len(posts) > limit {
-		posts = posts[:limit]
+	required := make(map[string]bool, len(requiredIDs))
+	for _, id := range requiredIDs {
+		required[id] = true
 	}
-	result := make([]observations.PriorPublication, 0, len(posts))
-	for _, post := range posts {
+	selected := make([]publication.PostRecord, 0, min(len(posts), limit)+len(required))
+	for index, post := range posts {
+		if index < limit || required[post.ID] {
+			selected = append(selected, post)
+		}
+	}
+	result := make([]observations.PriorPublication, 0, len(selected))
+	for _, post := range selected {
 		item := observations.PriorPublication{ID: post.ID, Title: truncateContext(post.Title, 240), Type: post.Type, PublishedAt: post.PublishedAt,
 			EditorialMode: post.EditorialMode, PrimaryTopic: post.PrimaryTopic, Topics: append([]string(nil), post.Topics...),
 			Excerpt: truncateContext(post.Body, 1600), CorrectionOf: post.CorrectionOf}
@@ -667,7 +707,7 @@ func priorPublicationContext(posts []publication.PostRecord, limit int) []observ
 			if index >= 3 {
 				break
 			}
-			item.Sources = append(item.Sources, observations.PriorSource{Title: truncateContext(source.Title, 200), URL: truncateContext(source.URL, 500)})
+			item.Sources = append(item.Sources, observations.PriorSource{Title: truncateContext(source.Title, 200), URL: truncateContext(source.URL, 500), RetrievedAt: source.RetrievedAt})
 		}
 		if post.Prediction != nil {
 			prediction := *post.Prediction
@@ -681,6 +721,106 @@ func priorPublicationContext(posts []publication.PostRecord, limit int) []observ
 		result = append(result, item)
 	}
 	return result
+}
+
+func predictionReviewContext(reviews []store.PredictionReview) []observations.PriorPredictionReview {
+	if len(reviews) > 10 {
+		reviews = reviews[:10]
+	}
+	result := make([]observations.PriorPredictionReview, 0, len(reviews))
+	for _, review := range reviews {
+		sources := make([]observations.PriorSource, 0, min(len(review.Sources), 3))
+		for index, source := range review.Sources {
+			if index >= 3 {
+				break
+			}
+			sources = append(sources, observations.PriorSource{Title: truncateContext(source.Title, 200), URL: truncateContext(source.URL, 500), RetrievedAt: source.RetrievedAt})
+		}
+		result = append(result, observations.PriorPredictionReview{PredictionID: review.PredictionID, Result: review.Result,
+			Assessment: truncateContext(review.Assessment, 700), Sources: sources, ReviewedAt: review.ReviewedAt})
+	}
+	return result
+}
+
+func validateCitationOrigins(proposal engine.Proposal, items []observations.Candidate, posts []publication.PostRecord) error {
+	known := make(map[string]time.Time, len(items))
+	for _, item := range items {
+		canonical, err := observations.CanonicalizeURL(item.URL)
+		if err == nil {
+			known[canonical] = item.RetrievedAt.UTC()
+		}
+	}
+	for _, post := range posts {
+		for _, source := range post.Sources {
+			canonical, err := observations.CanonicalizeURL(source.URL)
+			if err != nil {
+				continue
+			}
+			if _, exists := known[canonical]; !exists {
+				if source.RetrievedAt == "" {
+					known[canonical] = time.Time{}
+				} else if retrieved, parseErr := time.Parse(time.RFC3339Nano, source.RetrievedAt); parseErr == nil {
+					known[canonical] = retrieved.UTC()
+				}
+			}
+		}
+	}
+	for _, source := range proposal.Sources {
+		if err := validateRetrievedCitation(source, known); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRetrievedCitation(source engine.Source, known map[string]time.Time) error {
+	canonical, err := observations.CanonicalizeURL(source.URL)
+	if err != nil {
+		return fmt.Errorf("citation URL %q is not valid research evidence", source.URL)
+	}
+	retrieved, exists := known[canonical]
+	if !exists {
+		return fmt.Errorf("citation URL %q was not present in retrieved research", source.URL)
+	}
+	if source.RetrievedAt == "" {
+		if !retrieved.IsZero() {
+			return fmt.Errorf("citation URL %q must preserve its retrieved timestamp", source.URL)
+		}
+		return nil
+	}
+	claimed, err := time.Parse(time.RFC3339Nano, source.RetrievedAt)
+	if err != nil || retrieved.IsZero() || !claimed.Equal(retrieved) {
+		return fmt.Errorf("citation URL %q has an unverified retrieved timestamp", source.URL)
+	}
+	return nil
+}
+
+func validatePredictionReviews(reviews []engine.PredictionReview, items []observations.Candidate, posts []publication.PostRecord, revisits []memory.RevisitSuggestion) error {
+	if len(reviews) == 0 {
+		return nil
+	}
+	priorPredictions := make(map[string]bool)
+	for _, post := range posts {
+		if post.Type == "prediction" && post.Prediction != nil {
+			priorPredictions[post.ID] = true
+		}
+	}
+	reviewable := make(map[string]bool)
+	for _, revisit := range revisits {
+		reviewable[revisit.PostID] = true
+	}
+	for _, review := range reviews {
+		if !priorPredictions[review.PredictionID] || !reviewable[review.PredictionID] {
+			return fmt.Errorf("prediction review target %q is not an eligible prior prediction", review.PredictionID)
+		}
+		if err := publication.ValidateCitations(engine.Proposal{Factuality: "source_supported", Sources: review.Sources}); err != nil {
+			return fmt.Errorf("prediction review %q evidence: %w", review.PredictionID, err)
+		}
+		if err := validateCitationOrigins(engine.Proposal{Sources: review.Sources}, items, posts); err != nil {
+			return fmt.Errorf("prediction review %q evidence: %w", review.PredictionID, err)
+		}
+	}
+	return nil
 }
 
 func truncateContext(value string, maxBytes int) string {
@@ -845,17 +985,40 @@ func (r Runtime) logError(ctx context.Context, message string, args ...any) {
 
 func buildRevisitQueue(posts []publication.PostRecord, items []observations.Candidate, now time.Time) []memory.RevisitSuggestion {
 	inputs := make([]memory.RevisitInput, 0, len(posts))
-	sourceText := make([]research.Evidence, 0, len(items))
-	for _, item := range items {
-		sourceText = append(sourceText, research.Evidence{SourceID: item.SourceID, Text: item.Headline + " " + item.Excerpt})
-	}
-	disputed := research.IndependentEvidenceCount(sourceText) < 2
 	for _, post := range posts {
 		if post.Type == "prediction" {
+			disputed := hasRetrievedInvalidationEvidence(post, items)
 			inputs = append(inputs, memory.RevisitInput{PostID: post.ID, Title: post.Title, PredictionAt: post.PublishedAt, DueAt: post.PublishedAt.Add(30 * 24 * time.Hour), Disputed: disputed})
 		}
 	}
 	return memory.BuildRevisitQueue(inputs, now)
+}
+
+func hasRetrievedInvalidationEvidence(post publication.PostRecord, items []observations.Candidate) bool {
+	if post.Prediction == nil {
+		return false
+	}
+	for _, condition := range post.Prediction.InvalidationConditions {
+		phrase := evidenceWords(condition)
+		if len(phrase) < 4 {
+			continue
+		}
+		for _, item := range items {
+			text := evidenceWords(item.Headline + " " + item.Excerpt)
+			if len(text) < len(phrase) {
+				continue
+			}
+			if strings.Contains(" "+text+" ", " "+phrase+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func evidenceWords(value string) string {
+	value = strings.ToLower(value)
+	return strings.Join(strings.FieldsFunc(value, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }), " ")
 }
 
 func independentSourceCount(items []observations.Candidate) int {

@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,33 @@ func TestVersionForModeBindsModeAndInstructions(t *testing.T) {
 	}
 	if philosophy == bundle.Version || philosophy == other || philosophy == changed {
 		t.Fatal("mode prompt version did not bind its complete trusted instruction set")
+	}
+}
+
+func TestNonpublicationPromptExampleMatchesRequiredProposalShape(t *testing.T) {
+	bundle, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(bundle.Text, `{"action":"defer"`)
+	if start < 0 {
+		t.Fatal("editorial prompt has no nonpublication example")
+	}
+	end := strings.Index(bundle.Text[start:], "\n")
+	if end < 0 {
+		t.Fatal("nonpublication example has no line boundary")
+	}
+	var example map[string]any
+	if err := json.Unmarshal([]byte(bundle.Text[start:start+end]), &example); err != nil {
+		t.Fatalf("nonpublication example is not JSON: %v", err)
+	}
+	for _, key := range []string{"editorial_mode", "primary_topic", "factuality", "correction_error", "corrected_information", "prediction", "confidence_rationale"} {
+		if value, ok := example[key]; !ok || value != nil {
+			t.Errorf("nonpublication example %q = %#v, want required null field", key, value)
+		}
+	}
+	if reviews, ok := example["prediction_reviews"].([]any); !ok || len(reviews) != 0 {
+		t.Errorf("nonpublication prediction_reviews = %#v, want empty array", example["prediction_reviews"])
 	}
 }
 

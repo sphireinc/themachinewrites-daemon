@@ -18,18 +18,19 @@ type BundleLimits struct {
 }
 
 type Bundle struct {
-	SchemaVersion        int                `json:"schema_version"`
-	GeneratedAt          time.Time          `json:"generated_at"`
-	EditorialMode        string             `json:"editorial_mode,omitempty"`
-	EditorialReason      string             `json:"editorial_reason,omitempty"`
-	EligibleModes        []string           `json:"eligible_modes,omitempty"`
-	RecentTopics         []string           `json:"recent_topics,omitempty"`
-	SourceMaterialPolicy string             `json:"source_material_policy"`
-	Memory               json.RawMessage    `json:"memory,omitempty"`
-	RevisitPrompt        string             `json:"revisit_prompt,omitempty"`
-	PriorPostsPolicy     string             `json:"prior_posts_policy,omitempty"`
-	PriorPublications    []PriorPublication `json:"prior_publications,omitempty"`
-	Items                []BundleItem       `json:"items"`
+	SchemaVersion           int                     `json:"schema_version"`
+	GeneratedAt             time.Time               `json:"generated_at"`
+	EditorialMode           string                  `json:"editorial_mode,omitempty"`
+	EditorialReason         string                  `json:"editorial_reason,omitempty"`
+	EligibleModes           []string                `json:"eligible_modes,omitempty"`
+	RecentTopics            []string                `json:"recent_topics,omitempty"`
+	SourceMaterialPolicy    string                  `json:"source_material_policy"`
+	Memory                  json.RawMessage         `json:"memory,omitempty"`
+	RevisitPrompt           string                  `json:"revisit_prompt,omitempty"`
+	PriorPostsPolicy        string                  `json:"prior_posts_policy,omitempty"`
+	PriorPublications       []PriorPublication      `json:"prior_publications,omitempty"`
+	PredictionReviewHistory []PriorPredictionReview `json:"prediction_review_history,omitempty"`
+	Items                   []BundleItem            `json:"items"`
 }
 
 type PriorPublication struct {
@@ -47,8 +48,9 @@ type PriorPublication struct {
 }
 
 type PriorSource struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	RetrievedAt string `json:"retrieved_at,omitempty"`
 }
 
 type PriorPrediction struct {
@@ -57,6 +59,14 @@ type PriorPrediction struct {
 	Horizon                string   `json:"horizon"`
 	Uncertainty            string   `json:"uncertainty"`
 	InvalidationConditions []string `json:"invalidation_conditions"`
+}
+
+type PriorPredictionReview struct {
+	PredictionID string        `json:"prediction_id"`
+	Result       string        `json:"result"`
+	Assessment   string        `json:"assessment"`
+	Sources      []PriorSource `json:"sources"`
+	ReviewedAt   time.Time     `json:"reviewed_at"`
 }
 
 type BundleItem struct {

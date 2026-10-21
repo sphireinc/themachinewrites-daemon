@@ -55,6 +55,9 @@ func TestProposalSchemaMatchesCodexStructuredOutputRequirements(t *testing.T) {
 			t.Errorf("optional property %q must accept null", name)
 		}
 	}
+	if _, ok := properties["prediction_reviews"].(map[string]any); !ok || !required["prediction_reviews"] {
+		t.Fatal("prediction_reviews must be a required structured proposal field")
+	}
 }
 
 func unsupportedStructuredOutputKeyword(value any) string {

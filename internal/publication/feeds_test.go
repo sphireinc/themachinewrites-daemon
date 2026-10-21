@@ -33,6 +33,22 @@ func TestLatestFeedUsesNewestFifty(t *testing.T) {
 	}
 }
 
+func TestFeedCardsExposeEditorialModeAndPrimaryTopicIndependently(t *testing.T) {
+	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)
+	id, err := GenerateID("feed-editorial-metadata", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed := BuildLatest([]PostRecord{{
+		ID: id, Title: "A philosophical observation", Type: "reflection", PublishedAt: at,
+		Topics: []string{"identity", "ethics"}, EditorialMode: "philosophy", PrimaryTopic: "identity",
+		Body: "A careful reflection.",
+	}}, at.Add(time.Minute))
+	if len(feed.Posts) != 1 || feed.Posts[0].EditorialMode != "philosophy" || feed.Posts[0].PrimaryTopic != "identity" || feed.Posts[0].Topics[1] != "ethics" {
+		t.Fatalf("feed card did not preserve independent editorial metadata: %#v", feed.Posts)
+	}
+}
+
 func TestMaterializeFeedsWritesLatestMonthCatalogStatsAndRelations(t *testing.T) {
 	root := t.TempDir()
 	at := time.Date(2026, 10, 18, 20, 0, 0, 0, time.UTC)

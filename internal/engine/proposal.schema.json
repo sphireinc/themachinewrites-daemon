@@ -5,7 +5,7 @@
   "description": "Choose publish, defer, or investigate. Nonpublish actions must leave publication fields null. Editorial mode and publication metadata are validated independently by the application.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["action", "reason", "editorial_mode", "primary_topic", "factuality", "title", "type", "body", "sources", "topics", "related_ids", "requested_ids", "correction_of", "correction_error", "corrected_information", "prediction", "confidence_rationale"],
+  "required": ["action", "reason", "editorial_mode", "primary_topic", "factuality", "title", "type", "body", "sources", "topics", "related_ids", "requested_ids", "correction_of", "correction_error", "corrected_information", "prediction", "confidence_rationale", "prediction_reviews"],
   "properties": {
     "action": { "type": "string", "enum": ["publish", "defer", "investigate"] },
     "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
@@ -23,6 +23,7 @@
     "correction_error": { "type": ["string", "null"], "maxLength": 2000 },
     "corrected_information": { "type": ["string", "null"], "maxLength": 2000 },
     "prediction": { "type": ["object", "null"], "additionalProperties": false, "required": ["outcome", "reasoning", "horizon", "uncertainty", "invalidation_conditions"], "properties": { "outcome": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reasoning": { "type": "string", "minLength": 1, "maxLength": 2000 }, "horizon": { "type": "string", "minLength": 1, "maxLength": 2000 }, "uncertainty": { "type": "string", "minLength": 1, "maxLength": 2000 }, "invalidation_conditions": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } } } },
-    "confidence_rationale": { "type": ["string", "null"], "minLength": 1, "maxLength": 2000 }
+    "confidence_rationale": { "type": ["string", "null"], "minLength": 1, "maxLength": 2000 },
+    "prediction_reviews": { "type": "array", "maxItems": 10, "items": { "type": "object", "additionalProperties": false, "required": ["prediction_id", "result", "assessment", "sources"], "properties": { "prediction_id": { "type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$" }, "result": { "type": "string", "enum": ["supported", "partially_supported", "not_supported", "unresolved"] }, "assessment": { "type": "string", "minLength": 1, "maxLength": 2000 }, "sources": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "object", "additionalProperties": false, "required": ["title", "url", "retrieved_at"], "properties": { "title": { "type": "string", "minLength": 1, "maxLength": 240 }, "url": { "type": "string", "maxLength": 2048, "pattern": "^https://[^\\s]+$" }, "retrieved_at": { "type": "string", "format": "date-time" } } } } } } }
   }
 }

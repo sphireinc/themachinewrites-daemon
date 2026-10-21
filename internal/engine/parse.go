@@ -63,6 +63,36 @@ func ValidateProposalForMode(proposal Proposal, selectedMode string) (Proposal, 
 	if len(proposal.Reason) < 1 || len(proposal.Reason) > 1000 {
 		return Proposal{}, errors.New("reason must contain 1–1000 characters")
 	}
+	if len(proposal.PredictionReviews) > 10 {
+		return Proposal{}, errors.New("prediction review contains too many evaluations")
+	}
+	reviewedPredictions := make(map[string]bool, len(proposal.PredictionReviews))
+	for index, review := range proposal.PredictionReviews {
+		if !validCorrectionID(review.PredictionID) || reviewedPredictions[review.PredictionID] {
+			return Proposal{}, fmt.Errorf("prediction review %d requires a unique valid prediction_id", index+1)
+		}
+		reviewedPredictions[review.PredictionID] = true
+		switch review.Result {
+		case "supported", "partially_supported", "not_supported", "unresolved":
+		default:
+			return Proposal{}, fmt.Errorf("prediction review %d has an unsupported result", index+1)
+		}
+		if strings.TrimSpace(review.Assessment) == "" || len([]rune(review.Assessment)) > 2000 {
+			return Proposal{}, fmt.Errorf("prediction review %d assessment must contain 1–2000 characters", index+1)
+		}
+		if len(review.Sources) == 0 || len(review.Sources) > 10 {
+			return Proposal{}, fmt.Errorf("prediction review %d requires 1–10 evidence sources", index+1)
+		}
+		for sourceIndex, source := range review.Sources {
+			parsed, err := url.Parse(source.URL)
+			if strings.TrimSpace(source.Title) == "" || len([]rune(source.Title)) > 240 || len(source.URL) > 2048 || err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+				return Proposal{}, fmt.Errorf("prediction review %d source %d requires a title and absolute HTTPS URL", index+1, sourceIndex+1)
+			}
+			if _, err := time.Parse(time.RFC3339Nano, source.RetrievedAt); err != nil {
+				return Proposal{}, fmt.Errorf("prediction review %d source %d retrieved_at must be RFC3339", index+1, sourceIndex+1)
+			}
+		}
+	}
 	if hasDuplicates(proposal.Topics) {
 		return Proposal{}, errors.New("topics must be unique")
 	}

@@ -48,7 +48,7 @@ func (publishEngine) Run(context.Context, engine.Input) (engine.Proposal, error)
 	return engine.Proposal{
 		Action: engine.ActionPublish, Reason: "Fixture publication.",
 		Title: "A fixture publication", Type: "observation", Body: "A complete fixture observation.",
-		Sources: []engine.Source{{Title: "Fixture", URL: "https://example.org/source", RetrievedAt: "2026-10-18T20:00:00Z"}},
+		Sources: []engine.Source{{Title: "Fixture", URL: "https://example.org/one", RetrievedAt: "2026-10-18T20:00:00Z"}},
 		Topics:  []string{"technology"}, ConfidenceRationale: "One fixture source.",
 	}, nil
 }
@@ -274,7 +274,7 @@ func TestRuntimeSuppliesMaturedPredictionReviewContext(t *testing.T) {
 	if err := daemon.DecideAndPublish(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "active_dispute") || !strings.Contains(capture.input.Bundle, "correction linked") || !strings.Contains(capture.input.Bundle, "A measurable outcome") {
+	if !strings.Contains(capture.input.Bundle, postID) || !strings.Contains(capture.input.Bundle, "prediction_due") || strings.Contains(capture.input.Bundle, "active_dispute") || !strings.Contains(capture.input.Bundle, "correction linked") || !strings.Contains(capture.input.Bundle, "A measurable outcome") {
 		t.Fatalf("bundle omitted matured prediction context: %s", capture.input.Bundle)
 	}
 }
